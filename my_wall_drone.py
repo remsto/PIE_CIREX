@@ -41,6 +41,7 @@ class MyWallDrone(DroneAbstract):
 
         self.lidar_angles = self.lidar().ray_angles
 
+# Currently unused	
     def turn_90(self, direction):
         """
         Stop the drone and turn 90 degress toward the given direction
@@ -105,6 +106,7 @@ class MyWallDrone(DroneAbstract):
                 return data.angle
         return 0.0
 
+# Currently unused
     def corridor_mode(self):
         """
         Define how the drone has to move when in a corridor
