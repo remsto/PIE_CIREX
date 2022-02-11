@@ -3,6 +3,7 @@
 import random
 import numpy as np
 
+
 from math import cos
 from typing import Optional
 from enum import Enum
@@ -19,8 +20,9 @@ class MyWallDrone(DroneAbstract):
         """
         SEARCHING = 1
         FOUND = 2
-        TURNING_RIGHT = 3
-        TURNING_LEFT = 4
+        GOING_BACK = 3
+        TURNING_RIGHT = 4
+        TURNING_LEFT = 5
 
     def __init__(self, last_right_state: bool = None, identifier: Optional[int] = None, **kwargs):
         super().__init__(identifier=identifier,
@@ -32,7 +34,7 @@ class MyWallDrone(DroneAbstract):
 
         # Constants for the drone
         self.last_right_state = last_right_state
-        self.base_speed = 0.25
+        self.base_speed = 0.2
         self.base_rot_speed = 0.1
         self.epsilon = 5
 
@@ -40,8 +42,8 @@ class MyWallDrone(DroneAbstract):
         self.turning_time = 0
 
         self.lidar_angles = self.lidar().ray_angles
+        self.nb_angles = len(self.lidar_angles)
 
-# Currently unused	
     def turn_90(self, direction):
         """
         Stop the drone and turn 90 degress toward the given direction
@@ -87,13 +89,14 @@ class MyWallDrone(DroneAbstract):
         """
         Returns True if the drone hits an obstacle
         """
-        touched = False
-        detection = max(self.touch().sensor_values)
-
-        if detection > 0.5:
-            touched = True
-
-        return touched
+        touch_sensor = self.touch()
+        touch_angles = touch_sensor._ray_angles
+        touch_values = touch_sensor.sensor_values
+        if touch_values[3] > 0.7:
+            return "left"
+        elif touch_values[8] > 0.7:
+            return "right"
+        return None
 
     def process_semantic_sensor(self, the_semantic_sensor):
         """
@@ -103,10 +106,9 @@ class MyWallDrone(DroneAbstract):
 
         for data in values:
             if data.entity_type == DroneSemanticCones.TypeEntity.WOUNDED_PERSON:
-                return data.angle
-        return 0.0
+                return data.angle, data.distance
+        return 0.0, 0.0
 
-# Currently unused
     def corridor_mode(self):
         """
         Define how the drone has to move when in a corridor
@@ -133,29 +135,81 @@ class MyWallDrone(DroneAbstract):
 
         command = {self.longitudinal_force: 0.0,
                    self.lateral_force: 0.0,
-                   self.rotation_velocity: 0.0}
+                   self.rotation_velocity: 0.0,
+                   self.grasp: 0}
         distance_max = 20
 
         values = self.process_lidar_sensor(self.lidar())
+        if self.state is self.Activity.SEARCHING:
 
-        wall_front = values[44] < distance_max
-        wall_front_right = values[70] < distance_max
-        wall_right = values[89] < distance_max
+            wall_front = values[44] < distance_max
+            wall_front_right = values[70] < distance_max
+            wall_right = values[66] < distance_max
 
-        if not wall_front and not wall_right:
-            command[self.longitudinal_force] = self.base_speed
-        elif wall_front:
-            command[self.rotation_velocity] = -self.base_rot_speed
-        else:
-            x = values[89]
-            alpha = self.lidar_angles[66]
-            y = values[66]
-            if y > x/cos(alpha) + self.epsilon:
-                command[self.rotation_velocity] = self.base_rot_speed
-            elif y < x/cos(alpha) - self.epsilon:
+            if not wall_front and not wall_right:
+                command[self.longitudinal_force] = self.base_speed
+            elif wall_front:
                 command[self.rotation_velocity] = -self.base_rot_speed
             else:
+                x = values[66]
+                alpha = self.lidar_angles[55]
+                y = values[55]
+                if y > x/cos(alpha) + self.epsilon:
+                    command[self.rotation_velocity] = self.base_rot_speed
+                elif y < x/cos(alpha) - self.epsilon:
+                    command[self.rotation_velocity] = -self.base_rot_speed
+                else:
+                    command[self.longitudinal_force] = self.base_speed
+
+            # First prototype of Saving
+            # wounded_person_angle, wounded_person_distance = self.process_semantic_sensor(
+            #     self.semantic_cones())
+            # if wounded_person_angle != 0:
+            #     pass
+            #     self.state = self.Activity.FOUND
+
+        elif self.state is self.Activity.FOUND:
+            wounded_person_angle, wounded_person_distance = self.process_semantic_sensor(
+                self.semantic_cones())
+            if wounded_person_angle < 0:
+                command[self.rotation_velocity] = -self.base_rot_speed
                 command[self.longitudinal_force] = self.base_speed
+            elif wounded_person_angle > 0:
+                command[self.rotation_velocity] = self.base_rot_speed
+                command[self.longitudinal_force] = self.base_speed
+            if wounded_person_distance < 20:
+                command[self.grasp] = 1
+                self.state = self.Activity.GOING_BACK
+
+            # End of first prototype of saving
+        elif self.state is self.Activity.GOING_BACK:
+
+            command[self.grasp] = 1
+
+            wall_front = values[44] < distance_max
+            wall_front_right = values[70] < distance_max
+            wall_left = values[0] < distance_max
+
+            if not wall_front and not wall_left:
+                command[self.longitudinal_force] = self.base_speed
+            # elif wall_front:
+               #command[self.rotation_velocity] = self.base_rot_speed
+            else:
+                x = values[0]
+                alpha = self.lidar_angles[23]
+                y = values[23]
+                if y > x/cos(alpha) + self.epsilon:
+                    command[self.rotation_velocity] = -self.base_rot_speed
+                elif y < x/cos(alpha) - self.epsilon:
+                    command[self.rotation_velocity] = self.base_rot_speed
+                else:
+                    command[self.longitudinal_force] = self.base_speed
+
+        # touch_value = self.process_touch_sensor()
+        # if touch_value == "left":
+        #     command[self.lateral_force] = self.base_speed
+        # elif touch_value == "right":
+        #     command[self.lateral_force] = -self.base_speed
 
         """
         # First prototype of control
@@ -176,18 +230,6 @@ class MyWallDrone(DroneAbstract):
         # End of First Prototype of control
         """
 
-        """ # First prototype of Saving
-         wounded_person_angle = self.process_semantic_sensor(
-            self.semantic_cones())
-
-        if wounded_person_angle < 0:
-            command[self.rotation_velocity] = -self.base_rot_speed
-            command[self.longitudinal_force] = self.base_speed
-        elif wounded_person_angle > 0:
-            command[self.rotation_velocity] = self.base_rot_speed
-            command[self.longitudinal_force] = self.base_speed 
-        # End of first prototype of saving """
-
         if self.state is self.Activity.TURNING_LEFT:
             command = self.turn_90("left")
 
@@ -195,4 +237,3 @@ class MyWallDrone(DroneAbstract):
             command = self.turn_90("right")
 
         return command
-
