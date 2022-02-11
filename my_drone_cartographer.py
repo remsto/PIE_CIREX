@@ -4,11 +4,16 @@ from copy import deepcopy
 from typing import Optional
 
 import numpy as np
+import cv2
+
+from .KHT import *
 
 from spg_overlay.drone_abstract import DroneAbstract
 from spg_overlay.misc_data import MiscData
 from spg_overlay.drone_sensors import DroneSemanticCones
 from spg_overlay.utils import normalize_angle, sign
+
+import matplotlib.image as im
 
 def rot(angle):
         return np.matrix([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
@@ -26,6 +31,8 @@ class MyDroneCartographer(DroneAbstract):
 
         self.map = np.zeros(self.size_area)
         self.debug_id = DEBUG_ID
+        self.HSpace = HoughSpace([], self.size_area, 200, 200)
+        self.nstep = 0
 
     def update_map(self, lidar_sensor):
         drone_pos = np.array(self.true_position()).reshape(2, 1)
@@ -35,8 +42,10 @@ class MyDroneCartographer(DroneAbstract):
         semantic_angle = semantic_data[0].angle
         semantic_angle_id = 0
 
+        new_points = []
+
         for angle, mes in zip(lidar_sensor.ray_angles, lidar_sensor.get_sensor_values()):
-            while (abs(angle - semantic_angle) > (5 * math.pi / 180)) and (semantic_angle < angle) and (semantic_angle_id < len(semantic_data)):
+            while (abs(angle - semantic_angle) > (5 * math.pi / 180)) and (semantic_angle < angle) and (semantic_angle_id < (len(semantic_data) - 1)):
                 semantic_angle_id += 1
                 semantic_angle = semantic_data[semantic_angle_id].angle
 
@@ -49,10 +58,10 @@ class MyDroneCartographer(DroneAbstract):
                 if (abs(angle - semantic_angle) <= (5 * math.pi / 180)):
                     if (semantic_data[semantic_angle_id].entity_type != DroneSemanticCones.TypeEntity.DRONE):
                         self.map[round(x_cor), round(y_cor)] = 1
+                        new_points.append([x_cor, y_cor])
                 else:
                     self.map[round(x_cor), round(y_cor)] = 2
-
-                
+                    new_points.append([x_cor, y_cor])
 
                 try:
                     for e in range(3):
@@ -64,6 +73,8 @@ class MyDroneCartographer(DroneAbstract):
 
                 except IndexError:
                     pass
+
+        self.HSpace.add_points_to_process(new_points)
 
     def save_map(self):
         if (self.debug_id != self.identifier):
@@ -82,6 +93,12 @@ class MyDroneCartographer(DroneAbstract):
             for i in range(H):
                 for j in range(W):
                     f.write(Color[int(self.map[j, i])])
+
+        img =   cv2.imread("/home/antoine/PIE/swarm-rescue/src/swarm_rescue/cartographer_drone_map.ppm")
+        self.HSpace.background = img
+
+        self.HSpace.point_transform()
+        self.HSpace.draw_90deg_lines_length()
 
 
     def define_message(self):
@@ -108,8 +125,11 @@ class MyDroneCartographer(DroneAbstract):
 
         command_lidar, collision_lidar = self.process_lidar_sensor(self.lidar())
         found, command_comm = self.process_communication_sensor()
-        self.update_map(self.lidar())
-        self.save_map()
+
+        if not (self.nstep % 50):
+            self.update_map(self.lidar())
+            self.save_map()
+        self.nstep += 1
 
         alpha = 0.4
         alpha_rot = 0.75
