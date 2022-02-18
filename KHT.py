@@ -233,11 +233,12 @@ class Accumulator():
 
 class Line():
 
-    def __init__(self, orientation, p1, p2, label=""):
+    def __init__(self, orientation, p1, p2, label="", visited=False):
         self.orientation = orientation # Horizontal : False, Vertical : True.
         self.p1 = p1
         self.p2 = p2
         self.label = label
+        self.visited = visited
 
     def __str__(self):
         orientations = ["Horizontal", "Vertical"]
@@ -298,7 +299,7 @@ class Line():
                 y_min = max(self.p1[1], other.p1[1])
                 y_max = min(self.p2[1], other.p2[1])
                 x = np.mean([self.p1[0], self.p2[0], other.p1[0], other.p2[0]])
-                nline = Line(self.orientation, [x, y_max], [x, y_min], self.label)
+                nline = Line(self.orientation, [x, y_max], [x, y_min], self.label, self.visited or other.visited)
 
                 return nline
 
@@ -313,7 +314,7 @@ class Line():
                 x_min = max(self.p1[0], other.p1[0])
                 x_max = min(self.p2[0], other.p2[0])
                 y = np.mean([self.p1[1], self.p2[1], other.p1[1], other.p2[1]])
-                nline = Line(self.orientation, [x_min, y], [x_max, y], self.label)
+                nline = Line(self.orientation, [x_min, y], [x_max, y], self.label, self.visited or other.visited)
 
                 return nline
 
@@ -437,7 +438,7 @@ class HoughSpace():
                         else:
                             not_found_yet.append(p)
                     
-                    self.processed_points_cache = not_found_yet[:]
+                    # self.processed_points_cache = not_found_yet[:]
                     not_found_yet.clear()
 
                 if not found:
