@@ -61,9 +61,27 @@ class MyWallDrone(DroneAbstract):
         self.lidar_angles = self.lidar().ray_angles
         self.nb_angles = len(self.lidar_angles)
 
+    def draw_map(self, scale):
+        size = [self.size_area[1] // scale, self.size_area[0] // scale]
+        map = np.zeros(size)
+
+        for line in self.HSpace.data_walls:
+            if line.orientation:    # Droite verticale
+                for y in range(round(line.p1[1] // scale), round(line.p2[1] // scale) + 1):
+                    map[y, round(0.5 * (line.p1[0] + line.p2[0]))] = 1
+
+            else:
+                for x in range(round(line.p1[0] // scale), round(line.p2[0] // scale) + 1):
+                    map[y, round(0.5 * (line.p1[1] + line.p2[1]))] = 1
+
+        return map
+
     def update_map(self, lidar_sensor):
-        drone_pos = np.array(self.true_position()).reshape(2, 1)
-        drone_angle = self.true_angle()
+        # drone_pos = np.array(self.true_position()).reshape(2, 1)
+        # drone_angle = self.true_angle()
+
+        drone_pos = np.array(self.measured_position()).reshape(2, 1)
+        drone_angle = self.measured_angle()
 
         semantic_data = self.semantic_cones().sensor_values
         semantic_angle = semantic_data[0].angle
