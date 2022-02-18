@@ -230,12 +230,127 @@ class Accumulator():
                 break
 
         return lines
-     
+
+class Line():
+
+    def __init__(self, orientation, p1, p2, label=""):
+        self.orientation = orientation # Horizontal : False, Vertical : True.
+        self.p1 = p1
+        self.p2 = p2
+        self.label = label
+
+    def __str__(self):
+        orientations = ["Horizontal", "Vertical"]
+        return f"<{orientations[int(self.orientation)]} line between {self.p1} and {self.p2}>"
+
+    def __repr__(self):
+        return self.__str__()
+
+    def compare_walls(self, other):
+        if self.label != other.label:
+            return False
+
+        if self.orientation != other.orientation:
+            return False        
+
+        if self.orientation:
+            if np.mean([abs(self.p1[0] - other.p1[0]), abs(self.p1[0] - other.p2[0]), abs(self.p2[0] - other.p1[0]), abs(self.p2[0] - other.p2[0])]) >= 10:
+                return False
+
+            if not ((other.p1[1] < (self.p2[1] - 20)) or (self.p1[1] < (other.p2[1] - 20))):  # Droites avec union non nul
+                y_max = max(self.p1[1], other.p1[1])
+                y_min = min(self.p2[1], other.p2[1])
+                x = np.mean([self.p1[0], self.p2[0], other.p1[0], other.p2[0]])
+                nline = Line(self.orientation, [x, y_max], [x, y_min], self.label)
+
+                return nline
+
+            else:
+                return False
+
+        else:
+            if np.mean([abs(self.p1[1] - other.p1[1]), abs(self.p1[1] - other.p2[1]), abs(self.p2[1] - other.p1[1]), abs(self.p2[1] - other.p2[1])]) >= 10:
+                return False
+
+            if not ((other.p1[0] > (self.p2[0] + 20)) or (self.p1[0] > (other.p2[0] + 20))):  # Droites avec union non nul
+                x_min = min(self.p1[0], other.p1[0])
+                x_max = max(self.p2[0], other.p2[0])
+                y = np.mean([self.p1[1], self.p2[1], other.p1[1], other.p2[1]])
+                nline = Line(self.orientation, [x_min, y], [x_max, y], self.label)
+
+                return nline
+
+            else:
+                return False
+
+    def compare_doors(self, other):
+        if (self.label != "wall") and (other.label != "wall"):
+            return False
+
+        if self.orientation != other.orientation:
+            return False        
+
+        if self.orientation:
+            if np.mean([abs(self.p1[0] - other.p1[0]), abs(self.p1[0] - other.p2[0]), abs(self.p2[0] - other.p1[0]), abs(self.p2[0] - other.p2[0])]) >= 10:
+                return False
+
+            if not ((other.p1[1] < self.p2[1]) or (self.p1[1] < other.p2[1])):  # Droites avec union non nul
+                y_min = max(self.p1[1], other.p1[1])
+                y_max = min(self.p2[1], other.p2[1])
+                x = np.mean([self.p1[0], self.p2[0], other.p1[0], other.p2[0]])
+                nline = Line(self.orientation, [x, y_max], [x, y_min], self.label)
+
+                return nline
+
+            else:
+                return False
+
+        else:
+            if np.mean([abs(self.p1[1] - other.p1[1]), abs(self.p1[1] - other.p2[1]), abs(self.p2[1] - other.p1[1]), abs(self.p2[1] - other.p2[1])]) >= 10:
+                return False
+
+            if not ((other.p1[0] > self.p2[0]) or (self.p1[0] > other.p2[0])):  # Droites avec union non nul
+                x_min = max(self.p1[0], other.p1[0])
+                x_max = min(self.p2[0], other.p2[0])
+                y = np.mean([self.p1[1], self.p2[1], other.p1[1], other.p2[1]])
+                nline = Line(self.orientation, [x_min, y], [x_max, y], self.label)
+
+                return nline
+
+            else:
+                return False
+
+    def compare_door_wall(self, other): # Self = door, other = wall
+        if (self.label == "wall") and (other.label == "door"):
+            return other.compare_door_wall(self)
+
+        if (self.label != "door") and (other.label != "wall"):
+            return False
+
+        if self.orientation != other.orientation:
+            return False        
+
+        if self.orientation:
+            if np.mean([abs(self.p1[0] - other.p1[0]), abs(self.p1[0] - other.p2[0]), abs(self.p2[0] - other.p1[0]), abs(self.p2[0] - other.p2[0])]) > 5:
+                return False
+
+            return not ((other.p1[1] < (self.p2[1] + 10)) or (self.p1[1] < (other.p2[1] + 10)))  # Droites avec union non nul
+
+        else:
+            if np.mean([abs(self.p1[1] - other.p1[1]), abs(self.p1[1] - other.p2[1]), abs(self.p2[1] - other.p1[1]), abs(self.p2[1] - other.p2[1])]) > 5:
+                return False
+
+            return not ((other.p1[0] > (self.p2[0] - 10)) or (self.p1[0] > (other.p2[0] - 10)))  # Droites avec union non nul
+
+
+
+
 class HoughSpace():
 
     def __init__(self, points, img_space_shape, r_bins, theta_bins, img = None):
         self.processed_points = []
         self.not_processed_points = points
+        self.processed_points_cache = []
 
         self.img_space_shape = img_space_shape
 
@@ -250,6 +365,9 @@ class HoughSpace():
         self.accumulator = Accumulator(theta_bins, r_bins, self.max_theta, self.max_r)
         self.background = img
 
+        self.data_walls = []
+        self.data_doors = []
+
     def point_transform(self):
         for p in self.not_processed_points:
             theta = np.arange(0, self.accumulator.shape[1])
@@ -258,6 +376,7 @@ class HoughSpace():
                 self.accumulator[r // self.d_r, angle] += 1
 
         self.processed_points.extend(self.not_processed_points[:])
+        self.processed_points_cache = self.not_processed_points[:]
         self.not_processed_points.clear()
 
     def add_points_to_process(self, points):
@@ -266,6 +385,7 @@ class HoughSpace():
     def reset_processed_points(self):
         self.not_processed_points.extend(self.processed_points)
         self.processed_points.clear()
+        self.processed_points_cache.clear()
         self.accumulator.reset_accumulator()
 
     def get_lines(self, n=math.inf, threshold=2000):
@@ -284,17 +404,18 @@ class HoughSpace():
     def compute_lines_length(self):
         lines = self.accumulator.get_maxima_90degrees()
         nLines = []
+        not_found_yet = []
 
         for rho, theta in lines:
-            if (abs((np.pi / 2) - theta) >= (np.pi / 4)): # Gère le cas des droites verticales
+            if (abs((np.pi / 2) - theta) >= (np.pi / 4)): # Gère le cas des droites horizontales
                 x = np.linspace(0, self.img_space_shape[0] - 1, int(self.img_space_shape[0] // 10))
                 y = (rho / np.cos(theta)) - np.tan(theta) * x
-                tag = True  # Droite verticale : True, droite horizontale : False.
+                tag = False  # Droite verticale : True, droite horizontale : False.
 
-            else:   # Droites horizontales
+            else:   # Droites verticales
                 y = np.linspace(self.img_space_shape[1] - 1, 0, int(self.img_space_shape[1] // 10))
                 x = (rho / np.sin(theta)) - y / np.tan(theta)
-                tag = False # Droite verticale : True, droite horizontale : False.
+                tag = True # Droite verticale : True, droite horizontale : False.
 
             gap = True
             lline = 0
@@ -302,16 +423,22 @@ class HoughSpace():
             for xx, yy in zip(x, y):
                 found = False
                 if ((0 <= yy) and (yy < self.img_space_shape[1])) and ((0 <= xx) and (xx < self.img_space_shape[0])):
-                    for p in self.processed_points:
+                    for p in self.processed_points_cache:
                         if (np.sqrt((p[0] - xx)**2 + (p[1] - yy)**2) <= 10):
-                            found = True
-                            if gap:
-                                nLines.append([tag, p, p]) 
-                                lline = 0
-                                gap = False
-                            else:
-                                nLines[-1][-1] = p
-                            break
+                            if not found:
+                                found = True
+                                if gap:
+                                    nLines.append([tag, p, p]) 
+                                    lline = 0
+                                    gap = False
+                                else:
+                                    nLines[-1][-1] = p
+                            
+                        else:
+                            not_found_yet.append(p)
+                    
+                    self.processed_points_cache = not_found_yet[:]
+                    not_found_yet.clear()
 
                 if not found:
                     lline += 1
@@ -321,71 +448,175 @@ class HoughSpace():
         actual_lines = []
         for tag, p1, p2 in nLines:
             if (np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2) >= 20):
-                actual_lines.append(["wall", p1, p2])
+                if tag:
+                    if p1[1] > p2[1]:
+                        actual_lines.append(Line(tag, p1, p2, "wall"))
+                    else:
+                        actual_lines.append(Line(tag, p2, p1, "wall"))
 
-        # Détection de portes / couloirs
+                else:
+                    if p1[0] < p2[0]:
+                        actual_lines.append(Line(tag, p1, p2, "wall"))
+                    else:
+                        actual_lines.append(Line(tag, p2, p1, "wall"))
 
-        for i, l1 in enumerate(actual_lines[:-1]):
-            t1, p11, p12 = l1
-            for j, l2 in enumerate(actual_lines[(i+1):]):
-                t2, p21, p22 = l2
+                # Fusion dynamique des murs détectés
+
+                if not len(self.data_walls):
+                    self.data_walls.append(actual_lines[-1])
+
+                else:
+                    new_data = []
+                    affected_walls = []
+
+                    for index, l in enumerate(self.data_walls):
+                        res = l.compare_walls(actual_lines[-1])
+                        if res:
+                            affected_walls.append(res)
+                        else:
+                            new_data.append(l)
+
+                    if (len(affected_walls)):
+                        new_data.append(affected_walls[0])
+
+                        if (len(affected_walls) > 1):
+                            for a in affected_walls[1:]:
+                                new_data[-1] = a.compare_walls(new_data[-1])
+
+                    else:
+                        new_data.append(actual_lines[-1])
+
+                    self.data_walls = new_data[:]
+
+        HALLWAY_MAX_WIDTH = 120
+        HALLWAY_MIN_WIDTH = 30
+        
+        found_doors = []
+        lLen = 0
+
+        self.data_doors.clear()
+
+        for i, l1 in enumerate(self.data_walls[:-1]):
+            t1, p11, p12 = l1.orientation, l1.p1, l1.p2
+            for j, l2 in enumerate(self.data_walls[(i+1):]):
+                t2, p21, p22 = l2.orientation, l2.p1, l2.p2
                 if t1 == t2:  # Même orientation =    ||, :, =, --
                     if t1 and t2: #   || ou :
-                        if (abs(p11[0] - p21[0]) < 10): # Murs verticalement empilés
-                            if (abs(p12[1] - p21[1]) > 30) and (abs(p12[1] - p21[1]) < 80):
-                                actual_lines.append(["door", p12, p21])
-                            elif (abs(p11[1] - p22[1]) > 30) and (abs(p11[1] - p22[1]) < 80):
-                                actual_lines.append(["door", p22, p11])
+                        if (abs(p12[0] - p21[0]) < 10) or (abs(p11[0] - p22[0]) < 10): # Murs verticalement empilés
+                            if (abs(p12[1] - p21[1]) > HALLWAY_MIN_WIDTH) and (abs(p12[1] - p21[1]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, p12, p21, "door"))
+                            elif (abs(p11[1] - p22[1]) > HALLWAY_MIN_WIDTH) and (abs(p11[1] - p22[1]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, p22, p11, "door"))
 
                         elif not ((p21[1] > p12[1]) or (p11[1] > p22[1])):  #   Les murs forment un couloir
-                            if (abs(p11[0] - p21[0]) > 30) and (abs(p11[0] - p21[0]) < 80): # Largeur du couloir OK
+                            if (abs(p11[0] - p21[0]) > HALLWAY_MIN_WIDTH) and (abs(p11[0] - p21[0]) < HALLWAY_MAX_WIDTH): # Largeur du couloir OK
                                 y_min, y_max = max(p11[1], p21[1]), min(p12[1], p21[1])
-                                if (y_max - y_min) > 30: #  Couloir assez long
-                                    actual_lines.append(["hallway", [min(p11[0], p21[0]), y_min], [max(p11[0], p21[0]), y_min]])
-                                    actual_lines.append(["hallway", [min(p11[0], p21[0]), y_max], [max(p11[0], p21[0]), y_max]])
+                                if (y_max - y_min) > HALLWAY_MIN_WIDTH: #  Couloir assez long
+                                    found_doors.append(Line(t1, [min(p11[0], p21[0]), y_min], [max(p11[0], p21[0]), y_min], "hallway"))
+                                    found_doors.append(Line(t1, [min(p11[0], p21[0]), y_max], [max(p11[0], p21[0]), y_max], "hallway"))
 
                     elif not (t1 or t2): #  = ou --
-                        if (abs(p11[1] - p21[1]) < 10): # Murs horizontalement empilés
-                            if (abs(p12[0] - p21[0]) > 30) and (abs(p12[0] - p21[0]) < 80):
-                                actual_lines.append(["door", p12, p21])
-                            elif (abs(p11[0] - p22[0]) > 30) and (abs(p11[0] - p22[0]) < 80):
-                                actual_lines.append(["door", p22, p11])
+                        if (abs(p11[1] - p22[1]) < 10) or (abs(p12[1] - p21[1]) < 10): # Murs horizontalement empilés
+                            if (abs(p12[0] - p21[0]) > HALLWAY_MIN_WIDTH) and (abs(p12[0] - p21[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, p12, p21, "door"))
+                            elif (abs(p11[0] - p22[0]) > HALLWAY_MIN_WIDTH) and (abs(p11[0] - p22[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, p22, p11, "door"))
 
                         elif not ((p21[0] > p12[0]) or (p11[0] > p22[0])):  #   Les murs forment un couloir
-                            if (abs(p11[1] - p21[1]) > 30) and (abs(p11[1] - p21[1]) < 80): # Hauteur du couloir OK
+                            if (abs(p11[1] - p21[1]) > HALLWAY_MIN_WIDTH) and (abs(p11[1] - p21[1]) < HALLWAY_MAX_WIDTH): # Hauteur du couloir OK
                                 x_min, x_max = max(p11[0], p21[0]), min(p12[0], p21[0])
-                                if (x_max - x_min) > 30: #  Couloir assez long
-                                    actual_lines.append(["hallway", [x_min, min(p11[1], p21[1])], [x_min, max(p11[1], p21[1])]])
-                                    actual_lines.append(["hallway", [x_max, min(p11[1], p21[1])], [x_max, max(p11[1], p21[1])]])
+                                if (x_max - x_min) > HALLWAY_MIN_WIDTH: #  Couloir assez long
+                                    found_doors.append(Line(t1, [x_min, min(p11[1], p21[1])], [x_min, max(p11[1], p21[1])], "hallway"))
+                                    found_doors.append(Line(t1, [x_max, min(p11[1], p21[1])], [x_max, max(p11[1], p21[1])], "hallway"))
                 
                 else: # Orientations opposées : - |
                     if t1: # l1 verticale
-                        if (p21[1] > p11[1]) and (p21[1] < p12[1]): # Mur horizontal "coupe" le mur vertical
-                            if (abs(p11[0] - p21[0]) > 30) and (abs(p11[0] - p21[0]) < 80):
-                                actual_lines.append(["door", [p11[0], p21[1]], p21])
-                            elif (abs(p11[0] - p22[0]) > 30) and (abs(p11[0] - p22[0]) < 80):
-                                actual_lines.append(["door", p22, [p11[0], p22[1]]])
+                        if (p21[1] < (p11[1] + 10)) and (p21[1] > (p12[1] - 10)): # Mur horizontal "coupe" le mur vertical, marge de 10 pixels
+                            if (abs(p11[0] - p21[0]) > HALLWAY_MIN_WIDTH) and (abs(p11[0] - p21[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t2, [p11[0], p21[1]], p21, "door"))
+                            elif (abs(p11[0] - p22[0]) > HALLWAY_MIN_WIDTH) and (abs(p11[0] - p22[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t2, p22, [p11[0], p22[1]], "door"))
                         
-                        elif (p12[0] > p21[0]) and (p12[0] < p21[0]): # Mur vertical "coupe" le mur horizontal
-                            if (abs(p21[1] - p12[1]) > 30) and (abs(p21[1] - p12[1]) < 80):
-                                actual_lines.append(["door", p12, [p12[0], p21[1]]])
-                            elif (abs(p21[1] - p11[1]) > 30) and (abs(p21[1] - p11[1]) < 80):
-                                actual_lines.append(["door", [p11[0], p21[1]], p11])
+                        elif (p12[0] > (p21[0] - 10)) and (p12[0] < (p21[0] + 10)): # Mur vertical "coupe" le mur horizontal
+                            if (abs(p21[1] - p12[1]) > HALLWAY_MIN_WIDTH) and (abs(p21[1] - p12[1]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, p12, [p12[0], p21[1]], "door"))
+                            elif (abs(p21[1] - p11[1]) > HALLWAY_MIN_WIDTH) and (abs(p21[1] - p11[1]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, [p11[0], p21[1]], p11, "door"))
                     
                     else: # l2 verticale
-                        if (p11[1] > p21[1]) and (p11[1] < p22[1]): # Mur horizontal "coupe" le mur vertical
-                            if (abs(p21[0] - p11[0]) > 30) and (abs(p21[0] - p11[0]) < 80):
-                                actual_lines.append(["door", [p21[0], p11[1]], p11])
-                            elif (abs(p21[0] - p12[0]) > 30) and (abs(p21[0] - p12[0]) < 80):
-                                actual_lines.append(["door", p12, [p21[0], p12[1]]])
+                        if (p11[1] < (p21[1] + 10)) and (p11[1] > (p22[1] - 10)): # Mur horizontal "coupe" le mur vertical
+                            if (abs(p21[0] - p11[0]) > HALLWAY_MIN_WIDTH) and (abs(p21[0] - p11[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, [p21[0], p11[1]], p11, "door"))
+                            elif (abs(p21[0] - p12[0]) > HALLWAY_MIN_WIDTH) and (abs(p21[0] - p12[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t1, p12, [p21[0], p12[1]], "door"))
                         
-                        elif (p11[0] > p21[0]) and (p12[0] < p21[0]): # Mur vertical "coupe" le mur horizontal
-                            if (abs(p11[1] - p21[1]) > 30) and (abs(p11[1] - p21[1]) < 80):
-                                actual_lines.append(["door", [p21[0], p11[1]], p21])
-                            elif (abs(p11[1] - p22[1]) > 30) and (abs(p11[1] - p22[0]) < 80):
-                                actual_lines.append(["door", p22, [p22[0], p11[1]]])
+                        elif (p22[0] > (p11[0] - 10)) and (p22[0] < (p12[0] + 10)): # Mur vertical "coupe" le mur horizontal
+                            if (abs(p11[1] - p22[1]) > HALLWAY_MIN_WIDTH) and (abs(p11[1] - p22[1]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t2, [p22[0], p11[1]], p22, "door"))
+                            elif (abs(p11[1] - p21[1]) > HALLWAY_MIN_WIDTH) and (abs(p11[1] - p21[0]) < HALLWAY_MAX_WIDTH):
+                                found_doors.append(Line(t2, p21, [p21[0], p11[1]], "door"))
 
-        return actual_lines
+                if (len(found_doors) > lLen):
+                    lLen = len(found_doors)
+
+                    door_in_wall = False
+
+                    for wall in self.data_walls:
+                        if found_doors[-1].compare_door_wall(wall):
+                            door_in_wall = True
+                            break
+
+                    if not door_in_wall:
+                        if not len(self.data_doors):
+                                self.data_doors.append(found_doors[-1])
+
+                        else:
+                            new_data = []
+                            affected_doors = []
+
+                            for index, l in enumerate(self.data_doors):
+                                res = l.compare_doors(found_doors[-1])
+                                if res:
+                                    affected_doors.append(res)
+                                else:
+                                    new_data.append(l)
+
+                            if (len(affected_doors)):
+                                new_data.append(affected_doors[0])
+
+                                if (len(affected_doors) > 1):
+                                    for a in affected_doors[1:]:
+                                        new_data[-1] = a.compare_doors(new_data[-1])
+
+                            else:
+                                new_data.append(found_doors[-1])
+
+                            self.data_doors = new_data[:]
+
+        # new_doors = []
+
+        # if len(found_doors) < 2:
+        #     new_doors = found_doors[:]
+
+        # for index, l in enumerate(found_doors[:-1]):
+        #     i = 0
+        #     for d in found_doors[index+1:]:
+        #         res = d.compare_doors(l)
+        #         i += 1
+        #         if res:
+        #             break
+
+        #     if i == (len(found_doors) - index - 1):
+        #         new_doors.append(l)
+
+        # # self.data_doors.extend(new_doors)
+        # self.data_doors = new_doors[:]
+
+        ret = []
+        ret.extend(self.data_walls)
+        ret.extend(self.data_doors)
+
+        return ret
 
     def compute_lines(self, lines, n=math.inf, threshold=2000):
         for rho, theta in lines:
@@ -424,8 +655,9 @@ class HoughSpace():
 
         color_config = {"wall":"yellow", "door":"dodgerblue", "hallway":"springgreen"}
 
-        for t, p1, p2 in res:
-            plt.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color_config[t], linewidth=3)
+        for index in range(len(res)):
+            label, p1, p2 = res[index].label, res[index].p1, res[index].p2 
+            plt.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color_config[label], linewidth=3)
 
         imgplot = plt.imshow(self.background)
         plt.colorbar()

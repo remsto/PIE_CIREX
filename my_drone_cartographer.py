@@ -117,7 +117,7 @@ class MyDroneCartographer(DroneAbstract):
         position to stay at a certain distance and have the same orientation.
         """
 
-        print(f"{self.measured_position()} / {self.true_position()}")
+        # print(f"{self.measured_position()} / {self.true_position()}")
 
         command = {self.longitudinal_force: 0.0,
                    self.lateral_force: 0.0,
