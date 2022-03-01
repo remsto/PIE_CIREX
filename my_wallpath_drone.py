@@ -2,11 +2,12 @@
 
 import random
 import numpy as np
+import cv2
 
 
-from math import atan, cos, pi
+from math import sqrt, atan, cos, pi
 from typing import Optional
-from enum import Enum
+from enum import Enum, auto
 
 from spg_overlay.drone_abstract import DroneAbstract
 from spg_overlay.drone_sensors import DroneSemanticCones
@@ -14,18 +15,26 @@ from spg_overlay.utils import normalize_angle
 
 from solutions.algorithme_astar import astar
 
+from .KHT import *
+
+
+def rot(angle):
+    return np.matrix([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+
 
 class MyWallPathDrone(DroneAbstract):
     class Activity(Enum):
         """
         Possible states of the drone
         """
-        SEARCHING = 1
-        FOUND_WOUNDED = 2
-        GOING_BACK = 3
-        FOUND_CENTER = 4
-        TURNING_RIGHT = 5
-        TURNING_LEFT = 6
+        SEARCHING = auto()
+        FOUND_WOUNDED = auto()
+        GOING_BACK = auto()
+        GOING_BACK_BACK = auto()
+        FOUND_CENTER = auto()
+        TURNING_RIGHT = auto()
+        TURNING_LEFT = auto()
+        REPOSITIONING = auto()
 
     def __init__(self, last_right_state: bool = None, identifier: Optional[int] = None, **kwargs):
         super().__init__(identifier=identifier,
@@ -40,14 +49,22 @@ class MyWallPathDrone(DroneAbstract):
         self.base_speed = 0.2
         self.base_rot_speed = 0.1
         self.epsilon = 5
-        self.scale = 5
-        self.base_pos = (130, 50)
+        self.scale = 10
         self.path = []
+        self.reverse_path = []
+        self.debug_id = self.identifier
+
+        self.map = np.zeros(self.size_area)
+        self.explored_map = np.ones((
+            self.size_area[1]//self.scale, self.size_area[0]//self.scale))
+        self.HSpace = HoughSpace([], self.size_area, 200, 200)
+        self.nstep = 0
+        self.last_20_pos = [(i, i) for i in range(200)]
 
         # Dummy map for tests
-        self.map = [[0 for _ in range(1112//5)] for _ in range(750//5)]
-        for i in range(200):
-            self.map[119][i] = 1
+        # self.map = [[0 for _ in range(1112//5)] for _ in range(750//5)]
+        # for i in range(200):
+        #     self.map[119][i] = 1
 
         # A counter that allow the drone to turn for a specified amount of time
         self.turning_time = 0
@@ -61,14 +78,16 @@ class MyWallPathDrone(DroneAbstract):
         """
         pass
 
-    def path_to_points(self, path):
+    def path_to_points(self, path, map):
         """ Transforms a discrete path of doubles into a set of discrete points"""
         points = []
         direction = (path[1][0]-path[0][0], path[1][1]-path[0][1])
         for i in range(2, len(path)):
             if (path[i][0]-path[i-1][0], path[i][1]-path[i-1][1]) != direction:
-                points.append(path[i-1])
                 direction = (path[i][0]-path[i-1][0], path[i][1]-path[i-1][1])
+                path[i-1] = (path[i-1][0] + map[path[i-1][0]-1][path[i-1][1]] - map[path[i-1][0]+1][path[i-1][1]],
+                             path[i-1][1] + map[path[i-1][0]][path[i-1][1]-1] - map[path[i-1][0]][path[i-1][1]+1])
+                points.append(path[i-1])
         points.append(path[-1])
         return points
 
@@ -114,6 +133,116 @@ class MyWallPathDrone(DroneAbstract):
         values = the_lidar_sensor.get_sensor_values()
         return values
 
+    def update_map(self, lidar_sensor):
+        drone_pos = np.array(self.true_position()).reshape(2, 1)
+        drone_angle = self.true_angle()
+
+        semantic_data = self.semantic_cones().sensor_values
+        semantic_angle = semantic_data[0].angle
+        semantic_angle_id = 0
+
+        x, y = self.position
+        x = int(x//self.scale)
+        y = int(y//self.scale)
+        for i in range(-100//self.scale, 100//self.scale):
+            for j in range(-100//self.scale, 100//self.scale):
+                if x+i >= 0 and x+i < self.size_area[0]//self.scale and y+j >= 0 and y+j < self.size_area[1]//self.scale:
+                    self.explored_map[y+j][x+i] = 0
+
+        new_points = []
+
+        for angle, mes in zip(lidar_sensor.ray_angles, lidar_sensor.get_sensor_values()):
+            while (abs(angle - semantic_angle) > (5 * math.pi / 180)) and (semantic_angle < angle) and (semantic_angle_id < (len(semantic_data) - 1)):
+                semantic_angle_id += 1
+                semantic_angle = semantic_data[semantic_angle_id].angle
+
+            if mes < 290:
+                obstacle_pos = mes * \
+                    np.dot(rot(drone_angle + angle),
+                           np.array([1, 0]).reshape(2, 1)) + drone_pos
+
+                x_cor = max(min(self.size_area[0] - 1, obstacle_pos[0, 0]), 0)
+                y_cor = max(min(self.size_area[1] - 1, obstacle_pos[1, 0]), 0)
+
+                if (abs(angle - semantic_angle) <= (5 * math.pi / 180)):
+                    if (semantic_data[semantic_angle_id].entity_type != DroneSemanticCones.TypeEntity.DRONE):
+                        self.map[round(x_cor), round(y_cor)] = 1
+                        new_points.append([x_cor, y_cor])
+                    if (semantic_data[semantic_angle_id].entity_type == DroneSemanticCones.TypeEntity.RESCUE_CENTER and self.nstep == 0):
+                        self.base_pos = (round(y_cor)//self.scale,
+                                         round(x_cor)//self.scale)
+                        self.base_pos = (y, x)
+
+                else:
+                    self.map[round(x_cor), round(y_cor)] = 2
+                    new_points.append([x_cor, y_cor])
+
+                try:
+                    for e in range(3):
+                        for f in range(3):
+                            self.map[round(x_cor) + e, round(y_cor) +
+                                     f] = self.map[round(x_cor), round(y_cor)]
+                            self.map[round(x_cor) + e, round(y_cor) -
+                                     f] = self.map[round(x_cor), round(y_cor)]
+                            self.map[round(x_cor) - e, round(y_cor) +
+                                     f] = self.map[round(x_cor), round(y_cor)]
+                            self.map[round(x_cor) - e, round(y_cor) -
+                                     f] = self.map[round(x_cor), round(y_cor)]
+
+                except IndexError:
+                    pass
+
+        self.HSpace.add_points_to_process(new_points)
+
+    def save_map(self):
+        if (self.debug_id != self.identifier):
+            return
+
+        W, H = self.size_area
+        NOIR = "0 0 0\n"
+        BLANC = "255 255 255\n"
+        ROUGE = "255 0 0\n"
+
+        Color = [BLANC, NOIR, ROUGE]
+
+        with open("cartographer_drone_map.ppm", "w") as f:
+            f.write("P3\n")
+            f.write(f"{W} {H}\n255\n")
+            for i in range(H):
+                for j in range(W):
+                    f.write(Color[int(self.map[j, i])])
+
+        img = cv2.imread(
+            "/home/remsto/PIE/swarm-rescue/src/swarm_rescue/cartographer_drone_map.ppm")
+        self.HSpace.background = img
+
+        self.HSpace.point_transform()
+        self.HSpace.compute_lines_length()
+       # self.HSpace.draw_90deg_lines_length()
+
+    def draw_map(self, scale):
+        size = [self.size_area[1] // scale, self.size_area[0] // scale]
+        map = np.zeros(size)
+
+        for line in self.HSpace.data_walls:
+            if line.orientation:    # Droite verticale
+                for y in range(round(line.p2[1] // scale), round(line.p1[1] // scale) + 1):
+                    map[y, round(0.5 * (line.p1[0] + line.p2[0]))//scale] = 1
+
+            else:
+                for x in range(round(line.p1[0] // scale), round(line.p2[0] // scale) + 1):
+                    map[round(0.5 * (line.p1[1] + line.p2[1]))//scale, x] = 1
+
+        return map
+
+    def is_stucked(self, last_20_pos):
+        var = np.var(last_20_pos, axis=0)
+        return var[0] <= 2 and var[1] <= 2
+
+    def update_last_20_pos(self, last_20_pos, new_pos):
+        last_20_pos.pop(0)
+        last_20_pos.append(new_pos)
+
     def control(self):
         backleft_index = 11
         left_index = 22
@@ -129,31 +258,66 @@ class MyWallPathDrone(DroneAbstract):
                    self.grasp: 0}
         distance_max = 20
 
+        x, y = self.position
+        x = min(int(x), self.size_area[0])//self.scale
+        y = min(int(y), self.size_area[1])//self.scale
+        self.update_last_20_pos(self.last_20_pos, (y, x))
+        if self.is_stucked(self.last_20_pos):
+            self.state = self.Activity.REPOSITIONING
+
         values = self.process_lidar_sensor(self.lidar())
         if self.state is self.Activity.SEARCHING:
+            if not (self.nstep % 15):
+                self.update_map(self.lidar())
+            if not (self.nstep % 200):
+                self.save_map()
             wall_front = values[front_index] < distance_max
             wall_front_right = values[frontright_index] < distance_max
             wall_right = values[right_index] < distance_max
-            if not wall_front and not wall_right:
-                command[self.longitudinal_force] = self.base_speed
-            elif wall_front:
-                command[self.rotation_velocity] = -self.base_rot_speed
-            else:
-                x = values[right_index]
-                alpha = self.lidar_angles[frontright_index]
-                y = values[frontright_index]
-                if y > x/cos(alpha) + self.epsilon:
-                    command[self.rotation_velocity] = self.base_rot_speed
-                elif y < x/cos(alpha) - self.epsilon:
+            wall_left = values[left_index] < distance_max
+
+            if self.identifier % 2 == 0:
+
+                if not wall_front and not wall_right:
+                    command[self.longitudinal_force] = self.base_speed
+                elif wall_front:
                     command[self.rotation_velocity] = -self.base_rot_speed
                 else:
+                    x = values[right_index]
+                    alpha = self.lidar_angles[frontright_index]
+                    y = values[frontright_index]
+                    if y > x/cos(alpha) + self.epsilon:
+                        command[self.rotation_velocity] = self.base_rot_speed
+                    elif y < x/cos(alpha) - self.epsilon:
+                        command[self.rotation_velocity] = -self.base_rot_speed
+                    else:
+                        command[self.longitudinal_force] = self.base_speed
+            else:
+                if not wall_front and not wall_left:
                     command[self.longitudinal_force] = self.base_speed
+                elif wall_front:
+                    command[self.rotation_velocity] = self.base_rot_speed
+                else:
+                    x = values[left_index]
+                    alpha = self.lidar_angles[frontleft_index]
+                    y = values[frontleft_index]
+                    if y > x/cos(alpha) + self.epsilon:
+                        command[self.rotation_velocity] = -self.base_rot_speed
+                    elif y < x/cos(alpha) - self.epsilon:
+                        command[self.rotation_velocity] = self.base_rot_speed
+                    else:
+                        command[self.longitudinal_force] = self.base_speed
+
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
                 self.semantic_cones())
             if wounded_person_angle != 0:
                 self.state = self.Activity.FOUND_WOUNDED
 
         elif self.state is self.Activity.FOUND_WOUNDED:
+            if not (self.nstep % 15):
+                self.update_map(self.lidar())
+            if not (self.nstep % 200):
+                self.save_map()
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
                 self.semantic_cones())
             if wounded_person_angle < 0:
@@ -168,18 +332,28 @@ class MyWallPathDrone(DroneAbstract):
         elif self.state is self.Activity.GOING_BACK:
             command[self.grasp] = 1
             if self.path == []:
+                # self.save_map()
                 x, y = self.position
+                map_local = self.draw_map(self.scale)
                 x = min(int(x), self.size_area[0])//self.scale
                 y = min(int(y), self.size_area[1])//self.scale
-                self.path = self.path_to_points(
-                    astar(self.map, (y, x), self.base_pos))
+                try:
+                    self.path = self.path_to_points(
+                        astar(map_local+self.explored_map, (y, x), self.base_pos), map_local+self.explored_map)
+                    print(self.path)
+                    self.reverse_path = list(reversed(self.path))
+                    self.reverse_path.pop(0)
+                    self.reverse_path.append((y, x))
+                except:
+                    print(
+                        "Astar a merdé, probablement à cause de l'incertitude des mesures")
+                    self.state = self.Activity.SEARCHING
             else:
                 command[self.longitudinal_force] = 0.1
                 destination = self.path[0]
                 x, y = self.position
                 x = min(int(x), self.size_area[0])//self.scale
                 y = min(int(y), self.size_area[1])//self.scale
-                print(self.path)
                 x_diff = destination[1]-x
                 y_diff = destination[0]-y
                 alpha = 0
@@ -194,32 +368,70 @@ class MyWallPathDrone(DroneAbstract):
                     command[self.rotation_velocity] += 0.2
                 elif alpha_diff > 0:
                     command[self.rotation_velocity] -= 0.2
-                if abs(x_diff) <= 1 and abs(y_diff) <= 1:
+                if abs(x_diff)**2 + abs(y_diff)**2 <= 4:
                     self.path.pop(0)
-            center_angle, center_distance = self.process_semantic_sensor_center(
-                self.semantic_cones())
-            if center_angle != 0:
-                self.state = self.Activity.FOUND_CENTER
-            if center_distance < distance_max and center_distance > 0:
+                    if self.path == []:
+                        self.state = self.Activity.GOING_BACK_BACK
+            # center_angle, center_distance = self.process_semantic_sensor_center(
+            #     self.semantic_cones())
+            # if center_angle != 0:
+            #     self.state = self.Activity.FOUND_CENTER
+            # if center_distance < distance_max and center_distance > 0:
+            #     self.state = self.Activity.SEARCHING
+        # elif self.state is self.Activity.FOUND_CENTER:
+        #     command[self.grasp] = 1
+        #     center_angle, center_distance = self.process_semantic_sensor_wounded(
+        #         self.semantic_cones())
+        #     command[self.rotation_velocity] = self.base_rot_speed
+        #     if center_angle < 0:
+        #         command[self.rotation_velocity] = -self.base_rot_speed
+        #         command[self.longitudinal_force] = 0.1
+        #     elif center_angle > 0:
+        #         command[self.rotation_velocity] = self.base_rot_speed
+        #         command[self.longitudinal_force] = 0.1
+        #     if center_distance < 20 and center_distance > 0:
+        #         self.state = self.Activity.SEARCHING
+
+        elif self.state is self.Activity.GOING_BACK_BACK:
+            if self.reverse_path == []:
                 self.state = self.Activity.SEARCHING
-        elif self.state is self.Activity.FOUND_CENTER:
-            command[self.grasp] = 1
-            center_angle, center_distance = self.process_semantic_sensor_wounded(
-                self.semantic_cones())
-            command[self.rotation_velocity] = self.base_rot_speed
-            if center_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
+            else:
                 command[self.longitudinal_force] = 0.1
-            elif center_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
-            if center_distance < 20 and center_distance > 0:
-                self.state = self.Activity.SEARCHING
+                destination = self.reverse_path[0]
+                x, y = self.position
+                x = min(int(x), self.size_area[0])//self.scale
+                y = min(int(y), self.size_area[1])//self.scale
+                x_diff = destination[1]-x
+                y_diff = destination[0]-y
+                alpha = 0
+                if x_diff > 0:
+                    alpha = atan(y_diff/x_diff) % (2*pi)
+                elif x_diff < 0:
+                    alpha = pi + atan(y_diff/x_diff)
+                else:
+                    alpha = 0
+                alpha_diff = (alpha-self.angle) % (2*pi)
+                if alpha_diff < pi:
+                    command[self.rotation_velocity] += 0.2
+                elif alpha_diff > 0:
+                    command[self.rotation_velocity] -= 0.2
+                if abs(x_diff)**2 + abs(y_diff)**2 <= 4:
+                    self.reverse_path.pop(0)
+                    if self.reverse_path == []:
+                        self.state = self.Activity.SEARCHING
+
+        elif self.state is self.Activity.REPOSITIONING:
+            command[self.longitudinal_force] = -1
+            command[self.lateral_force] = -0.5 if self.nstep % 2 == 0 else 0.5
+            self.last_20_pos = [(i, i) for i in range(200)]
+            self.state = self.Activity.SEARCHING
 
         touch_value = self.process_touch_sensor()
         if touch_value == "left":
             command[self.lateral_force] = self.base_speed
         elif touch_value == "right":
             command[self.lateral_force] = -self.base_speed
+
+        self.nstep += 1
 
         return command
