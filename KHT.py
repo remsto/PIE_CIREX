@@ -1,14 +1,17 @@
 #%%
-from curses.ascii import NL
 import math
-from typing import Iterable, List
-from cv2 import COLOR_BGR2GRAY, CV_8UC1, IMREAD_ANYCOLOR, IMREAD_GRAYSCALE, WINDOW_AUTOSIZE
+import operator
+from time import time_ns
+from typing import Callable
 import numpy as np
-from scipy.linalg import eig
 import scipy.ndimage as sci
 import scipy.signal as sig
+import scipy.spatial as spatial
 
-import matplotlib.image as im, matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+
+import multiprocessing as mp
+import functools as func
 
 #%%
 class Pixel():
@@ -68,6 +71,15 @@ def find_peaks(img, threshold=50):
 # ax.set_title('After')
 # plt.show()
 #%%
+
+def mes_perf(f:Callable):
+    def g(*args, **kwargs):
+        start = time_ns()
+        ret = f(*args, **kwargs)
+        print(f"Temps d'exécution de la fonction {f.__name__} : {time_ns() - start}\n")
+        return ret
+
+    return g
 class Accumulator():
 
     def __init__(self, theta_bins, r_bins, max_theta, max_r):
@@ -115,6 +127,20 @@ class Accumulator():
         if (theta == (self.t_bins - 1)):
             self.accumulator[-nR + self.r_bins, 0] = value
 
+    def __add__(self, other):
+        if not isinstance(other, self.__class__): raise TypeError
+
+        if self.accumulator.shape != other.accumulator.shape: raise IndexError
+
+        res = Accumulator(self.t_bins, self.r_bins, self.max_theta, self.max_r)
+
+        for i in range(self.accumulator.shape[0]):
+            for j in range(self.accumulator.shape[1]):
+                res.accumulator[i, j] = self.accumulator[i, j] + other.accumulator[i, j]
+
+        return res
+
+    # @mes_perf
     def get_maxima_90degrees(self, n = math.inf, threshold = 10, theta_res=0.07, t_width=1):
         array_0deg = np.concatenate((np.flip(self.accumulator[1:-1, (-t_width-1):-1]), self.accumulator[1:-1, 1:(t_width+2)]), axis = 1)
         array_90deg = self.accumulator[1:-1, (int(math.ceil(self.t_bins/2))-t_width+1):(int(math.ceil(self.t_bins/2))+t_width+1)]  # self.t_bins doit être pair pour que la répartition soit symétrique
@@ -230,6 +256,20 @@ class Accumulator():
                 break
 
         return lines
+
+
+
+def apply(tpl):
+    f, args = tpl[0], tpl[1:]
+    return f(*args)
+
+def process_points(points, accumulator: Accumulator):
+    for p in points:
+        theta = np.arange(0, accumulator.shape[1])
+        d = p[0] * np.sin(accumulator.d_theta * theta) + p[1] * np.cos(accumulator.d_theta * theta)
+        for r, angle in zip(d, theta):
+            accumulator[r // accumulator.d_r, angle] += 1
+    return accumulator
 
 class Line():
 
@@ -363,18 +403,36 @@ class HoughSpace():
         self.d_theta = self.max_theta / theta_bins
         self.d_r = self.max_r / r_bins
 
+        self.t_bins = theta_bins
+        self.r_bins = r_bins
+
         self.accumulator = Accumulator(theta_bins, r_bins, self.max_theta, self.max_r)
         self.background = img
 
         self.data_walls = []
         self.data_doors = []
 
-    def point_transform(self):
+    # @mes_perf
+    def _point_transform_parallel(self):
+        N_PROCESSES = 4
+
+        f = [func.partial(process_points, self.not_processed_points[i:-1:N_PROCESSES]) for i in range(N_PROCESSES)]
+        accumulators = [Accumulator(self.accumulator.t_bins, self.accumulator.r_bins, self.max_theta, self.max_r) for i in range(N_PROCESSES)]
+
+        with mp.Pool(N_PROCESSES) as pool:
+            self.accumulator += func.reduce(operator.add, pool.map(apply, zip(f, accumulators)))
+
+    # @mes_perf
+    def _point_transform_sides(self):
         for p in self.not_processed_points:
-            theta = np.arange(0, self.accumulator.shape[1])
+            theta = np.array([0, 1, int(math.ceil(self.t_bins/2)), int(math.ceil(self.t_bins/2) + 1), self.t_bins - 1])
             d = p[0] * np.sin(self.d_theta * theta) + p[1] * np.cos(self.d_theta * theta)
             for r, angle in zip(d, theta):
-                self.accumulator[r // self.d_r, angle] += 1
+                self.accumulator[r // self.accumulator.d_r, angle] += 1
+
+    def point_transform(self):
+        # self._point_transform_parallel()
+        self._point_transform_sides()
 
         self.processed_points.extend(self.not_processed_points[:])
         self.processed_points_cache = self.not_processed_points[:]
@@ -402,10 +460,13 @@ class HoughSpace():
         plt.colorbar()
         plt.show()
     
+    # @mes_perf
     def compute_lines_length(self):
         lines = self.accumulator.get_maxima_90degrees()
         nLines = []
         not_found_yet = []
+
+        kd_points = spatial.KDTree(self.processed_points_cache)
 
         for rho, theta in lines:
             if (abs((np.pi / 2) - theta) >= (np.pi / 4)): # Gère le cas des droites horizontales
@@ -424,22 +485,16 @@ class HoughSpace():
             for xx, yy in zip(x, y):
                 found = False
                 if ((0 <= yy) and (yy < self.img_space_shape[1])) and ((0 <= xx) and (xx < self.img_space_shape[0])):
-                    for p in self.processed_points_cache:
-                        if (np.sqrt((p[0] - xx)**2 + (p[1] - yy)**2) <= 10):
-                            if not found:
-                                found = True
-                                if gap:
-                                    nLines.append([tag, p, p]) 
-                                    lline = 0
-                                    gap = False
-                                else:
-                                    nLines[-1][-1] = p
-                            
-                        else:
-                            not_found_yet.append(p)
-                    
-                    # self.processed_points_cache = not_found_yet[:]
-                    not_found_yet.clear()
+                    matches = kd_points.query_ball_point([xx, yy], 10, workers=1, return_sorted=True)
+                    if len(matches):
+                        if not found:
+                            found = True
+                            if gap:
+                                nLines.append([tag, self.processed_points_cache[matches[0]], self.processed_points_cache[matches[0]]]) 
+                                lline = 0
+                                gap = False
+                            else:
+                                nLines[-1][-1] = self.processed_points_cache[matches[0]]
 
                 if not found:
                     lline += 1

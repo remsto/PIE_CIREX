@@ -173,33 +173,35 @@ class MyWallDrone(DroneAbstract):
 
         self.HSpace.add_points_to_process(new_points)
 
+    @mes_perf
     def save_map(self):
         if (self.debug_id != self.identifier):
             return
 
-        W, H = self.size_area
-        NOIR = "0 0 0\n"
-        BLANC = "255 255 255\n"
-        ROUGE = "255 0 0\n"
+        # W, H = self.size_area
+        # NOIR = "0 0 0\n"
+        # BLANC = "255 255 255\n"
+        # ROUGE = "255 0 0\n"
 
-        Color = [BLANC, NOIR, ROUGE]
+        # Color = [BLANC, NOIR, ROUGE]
 
-        with open("cartographer_drone_map.ppm", "w") as f:
-            f.write("P3\n")
-            f.write(f"{W} {H}\n255\n")
-            for i in range(H):
-                for j in range(W):
-                    f.write(Color[int(self.map[j, i])])
+        # with open("cartographer_drone_map.ppm", "w") as f:
+        #     f.write("P3\n")
+        #     f.write(f"{W} {H}\n255\n")
+        #     for i in range(H):
+        #         for j in range(W):
+        #             f.write(Color[int(self.map[j, i])])
 
-        img =   cv2.imread("/home/antoine/PIE/swarm-rescue/src/swarm_rescue/cartographer_drone_map.ppm")
-        self.HSpace.background = img
+        # img =   cv2.imread("/home/antoine/PIE/swarm-rescue/src/swarm_rescue/cartographer_drone_map.ppm")
+        # self.HSpace.background = img
 
         self.HSpace.point_transform()
-        self.HSpace.draw_90deg_lines_length()
+        # self.HSpace.draw_90deg_lines_length()
+        self.HSpace.compute_lines_length()
         map = self.draw_map(5)
 
-        plt.imshow(map)
-        plt.show()
+        # plt.imshow(map)
+        # plt.show()
 
     def turn_90(self, direction):
         """
@@ -330,6 +332,7 @@ class MyWallDrone(DroneAbstract):
             self.update_map(self.lidar())
         if not (self.nstep % 50):
             self.save_map()
+            self.accumulator_map = np.zeros(self.accumulator_map.shape)
         self.nstep += 1
 
 
