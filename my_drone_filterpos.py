@@ -1,7 +1,7 @@
 import random
 from math import *
 from copy import deepcopy
-from re import S
+from re import L, S
 from typing import Optional, Type
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +29,7 @@ class MyDroneFilterPos(DroneAbstract):
         self.isTurning = False
         self.map = np.zeros(self.size_area)
         self.l_pos = [np.array([[0.0], [0.0]])]
+        self.chief_pos = np.array([[0.0], [0.0]])
         self.l_vit = []
         self.l_true_pos = []
         self.raw_data = []
@@ -48,7 +49,7 @@ class MyDroneFilterPos(DroneAbstract):
         self.type = self.get_type()
         # A counter that allow the drone to turn for a specified amount of time
         self.turning_time = 0
-        self.next_pos_to_go = -1
+        self.next_pos_to_go = []
         self.lidar_angles = self.lidar().ray_angles
         self.nb_angles = len(self.lidar_angles)
 
@@ -156,7 +157,7 @@ class MyDroneFilterPos(DroneAbstract):
         values = the_semantic_sensor.sensor_values
 
         for data in values:
-            if data.entity_type == DroneSemanticCones.TypeEntity.WOUNDED_PERSON:
+            if data.entity_type == DroneSemanticCones.TypeEntity.DRONE:
                 return data.angle, data.distance
         return 0.0, 0.0
 
@@ -170,38 +171,62 @@ class MyDroneFilterPos(DroneAbstract):
     def control_follower(self):
         values = self.semantic_cones().sensor_values
 
-        for data in values:
-            if data.entity_type == DroneSemanticCones.TypeEntity.DRONE:
-                print(data)
         command = {self.longitudinal_force: 0.0,
                    self.lateral_force: 0.0,
                    self.rotation_velocity: 0.0,
                    self.grasp: 0}
-        destination = self.next_pos_to_go
 
-        try:
-            if self.next_pos_to_go == -1:
-                destination = self.l_pos[-1]
-        except:
-            pass
+        is_a_drone = False
+        cones = self.semantic_cones().sensor_values
+        for v in cones:
+            if v.entity_type == DroneSemanticCones.TypeEntity.DRONE:
+                is_a_drone = True
+                break
+
         x, y = self.l_pos[-1][0][0], self.l_pos[-1][1][0]
-        #x = min(int(x), self.size_area[0])
-        #y = min(int(y), self.size_area[1])
+        destination = self.l_pos[-1]
+        distance_from_drone = 0
+        if len(self.next_pos_to_go) >= 1:
+
+            destination = self.next_pos_to_go[0]
+
+            distance_from_drone = np.linalg.norm(
+                self.next_pos_to_go[-1]-self.l_pos[-1])
+
+            look_shortcut = self.next_pos_to_go[:]
+            look_shortcut.reverse()
+            for n, i in enumerate(look_shortcut):
+                d = np.linalg.norm(i - self.l_pos[-1])
+                if d < 7:
+                    self.next_pos_to_go = self.next_pos_to_go[n-1:]
+                    break
+
         x_diff = destination[0][0]-x
         y_diff = destination[1][0]-y
+        # x = min(int(x), self.size_area[0])
+        # y = min(int(y), self.size_area[1])
 
         alpha = atan2(y_diff, x_diff)
-        a2 = self.measured_angle() if self.measured_angle(
-        ) < pi else self.measured_angle() - 2 * pi
-        alpha_diff = (alpha-a2)
+        alpha = normalize_angle(alpha)
+        a2 = normalize_angle(self.measured_angle())
+        alpha_diff = normalize_angle(alpha-a2)
 
         if alpha_diff < 0:
             command[self.rotation_velocity] -= 0.2
         elif alpha_diff > 0:
             command[self.rotation_velocity] += 0.2
 
-        command[self.longitudinal_force] = 0.5 - \
-            exp(-sqrt(x_diff**2 + y_diff**2)/75)
+        if distance_from_drone > 100:
+            self.next_pos_to_go.pop(0)
+
+        if not is_a_drone:
+            distance_from_drone = 80
+
+        d_chief = np.linalg.norm(self.chief_pos-self.l_pos[-1])
+        if d_chief < 100:
+            distance_from_drone = d_chief
+        command[self.longitudinal_force] = max(
+            0.4 - exp(-distance_from_drone/50), -0.2)
         return command
 
     def control_leader(self):
@@ -240,6 +265,7 @@ class MyDroneFilterPos(DroneAbstract):
             # if wounded_person_angle != 0:
             #     pass
             #     self.state = self.Activity.FOUND
+
         elif self.state is self.Activity.FOUND:
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor(
                 self.semantic_cones())
@@ -307,18 +333,10 @@ class MyDroneFilterPos(DroneAbstract):
                 try:
                     message = message[1]
                     if self.type == self.Type.FOLLOWER:
-                        if message[1] == self.identifier:
-                            self.next_pos_to_go = message[2]
-                        else:
-                            self.next_pos_to_go = -1
-                    else:
-                        if message[1] == self.identifier:
-                            norm = np.linalg.norm(
-                                self.l_pos[-1] - message[2])
-                            """if norm > 30:
-                                self.state = self.Activity.STOP
-                            else:
-                                self.state = self.Activity.SEARCHING"""
+                        if message[1] == self.identifier and message[0] == self.identifier - 1:
+                            self.next_pos_to_go.append(message[2])
+                        elif message[1] == 0:
+                            self.chief_pos = message[2]
                 except:
                     print("error")
                     pass
@@ -327,29 +345,20 @@ class MyDroneFilterPos(DroneAbstract):
         """
         Define the message, the drone will send to and receive from other surrounding drones.
         """
-        rcv = 0
-        print(self.position - self.true_position())
-        if(self.type == self.Type.FOLLOWER):
-            rcv = 0
-            try:
-                msg_data = (self.identifier, rcv,
-                            self.l_pos[-1])
-            except:
-                msg_data = (self.identifier, rcv,
-                            None)
-        else:
-            rcv = 1
-            try:
-                msg_data = (self.identifier, rcv, self.l_pos[-1])
-            except:
-                msg_data = (self.identifier, rcv, None)
+        dest = self.identifier + 1
+        try:
+            msg_data = (self.identifier, dest,
+                        self.l_pos[-1])
+        except:
+            msg_data = (self.identifier, dest,
+                        None)
         return msg_data
 
 
 """
-    
 
-    
+
+
 
     def control(self, elapsed_time):
 
