@@ -39,6 +39,10 @@ class MyWallPathDrone(DroneAbstract):
         TURNING_LEFT = auto()
         REPOSITIONING = auto()
 
+        GO_GETEM = auto()
+        BRING_TO_RESCUE = auto()
+        STAND_BY = auto()
+
     def __init__(self, last_right_state: bool = None, identifier: Optional[int] = None, **kwargs):
         super().__init__(identifier=identifier,
                          should_display_lidar=False,
@@ -46,7 +50,7 @@ class MyWallPathDrone(DroneAbstract):
 
         # State of the drone from the Enum Activity class
         self.state = self.Activity.SEARCHING_RIGHT if self.identifier % 2 == 0 else self.Activity.SEARCHING_LEFT
-        self.state = self.Activity.TRUCDEANTOINE if self.identifier == 2 else self.state
+        self.state = self.Activity.STAND_BY if self.identifier == 2 else self.state
 
         # Constants for the drone
         self.last_right_state = last_right_state
@@ -82,7 +86,11 @@ class MyWallPathDrone(DroneAbstract):
         """
         Here, we don't need communication...
         """
-        pass
+        try:
+            x, y = self.get_pos()
+            return [self.identifier, -1, np.array([x, y])]
+        except:
+            pass
 
     def path_to_points(self, path, map):
         """ Transforms a discrete path of doubles into a set of discrete points"""
@@ -138,6 +146,29 @@ class MyWallPathDrone(DroneAbstract):
         """
         values = the_lidar_sensor.get_sensor_values()
         return values
+
+    def process_communication_sensor(self):
+
+        try:
+            x, y = self.get_pos()
+            pos = np.array([x, y])
+        except:
+            print("Erreur")
+            return False
+
+        if self.communication:
+            messages = self.communication.received_message
+            print(messages)
+            for msg in messages:
+                try:
+                    other_pos = msg[2]
+                    if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) > 100 and msg[0] != 2:
+                        return False
+
+                except Exception:
+                    pass
+
+        return True
 
     def filter_position(self):
 
@@ -301,11 +332,59 @@ class MyWallPathDrone(DroneAbstract):
         x = min(int(x), self.size_area[0])//self.scale
         y = min(int(y), self.size_area[1])//self.scale
         self.update_last_20_pos(self.last_20_pos, (y, x))
-        if self.is_stucked(self.last_20_pos):
+        if self.is_stucked(self.last_20_pos) and self.identifier != 2:
             command[self.grasp] = 1
             self.state = self.Activity.REPOSITIONING
 
         values = self.process_lidar_sensor(self.lidar())
+
+        if self.process_communication_sensor() and self.state is self.Activity.STAND_BY:
+            print(self.nstep)
+            if self.process_semantic_sensor_wounded(self.semantic_cones()) != (0.0, 0.0):
+                self.state = self.Activity.GO_GETEM
+
+        x, y = self.get_pos()
+        x = min(int(x), self.size_area[0])//self.scale
+        y = min(int(y), self.size_area[1])//self.scale
+        self.update_last_20_pos(self.last_20_pos, (y, x))
+
+        values = self.process_lidar_sensor(self.lidar())
+
+        if self.state is self.Activity.GO_GETEM:
+            wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
+                self.semantic_cones())
+            theta = self.measured_angle()
+            c, s = np.cos(theta), np.sin(theta)
+            R = np.array(((c, -s), (s, c)))
+            if wounded_person_angle < 0:
+                command[self.rotation_velocity] = -self.base_rot_speed
+                command[self.longitudinal_force] = 0.1
+            elif wounded_person_angle > 0:
+                command[self.rotation_velocity] = self.base_rot_speed
+                command[self.longitudinal_force] = 0.1
+
+            if wounded_person_distance < 20 and wounded_person_distance > 0:
+                command[self.grasp] = 1
+                self.state = self.Activity.BRING_TO_RESCUE
+
+        elif self.state is self.Activity.BRING_TO_RESCUE:
+            command[self.grasp] = 1
+            rescue_center_angle, rescue_center_distance = self.process_semantic_sensor_wounded(
+                self.semantic_cones())
+            theta = self.measured_angle()
+            c, s = np.cos(theta), np.sin(theta)
+            R = np.array(((c, -s), (s, c)))
+            if rescue_center_angle < 0:
+                command[self.rotation_velocity] = -self.base_rot_speed
+                command[self.longitudinal_force] = 0.1
+            elif rescue_center_angle > 0:
+                command[self.rotation_velocity] = self.base_rot_speed
+                command[self.longitudinal_force] = 0.1
+
+            if rescue_center_distance < 20 and rescue_center_distance > 0:
+                command[self.grasp] = 1
+                self.state = self.Activity.STAND_BY
+
         if self.state is self.Activity.SEARCHING_RIGHT:
             if not (self.nstep % 15):
                 self.update_map(self.lidar())
