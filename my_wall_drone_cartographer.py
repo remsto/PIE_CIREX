@@ -45,6 +45,16 @@ class MyWallDrone(DroneAbstract):
         self.debug_id = DEBUG_ID
         self.HSpace = HoughSpace([], self.size_area, 200, 200)
         self.nstep = 0
+        self.l_pos = []
+        self.l_vit = []
+        self.l_true_pos = []
+        self.raw_data = []
+        self.pos2 = []
+        self.time = []
+
+        self.scale = 5
+        self.accumulator_map = np.zeros((round(self.size_area[1] // self.scale) + 1, round(self.size_area[0] // 5) + 1))
+        self.visited_doors = []
 
         # State of the drone from the Enum Activity class
         self.state = self.Activity.SEARCHING
@@ -61,9 +71,55 @@ class MyWallDrone(DroneAbstract):
         self.lidar_angles = self.lidar().ray_angles
         self.nb_angles = len(self.lidar_angles)
 
+    def draw_map(self, scale):
+        size = [self.size_area[1] // scale, self.size_area[0] // scale]
+        map = np.zeros(size)
+
+        for line in self.HSpace.data_walls:
+            if line.orientation:    # Droite verticale
+                for y in range(round(line.p2[1] // scale), round(line.p1[1] // scale) + 1):
+                    map[y, round(0.5 * (line.p1[0] + line.p2[0]) // scale)] = 1
+
+            else:
+                for x in range(round(line.p1[0] // scale), round(line.p2[0] // scale) + 1):
+                    map[round(0.5 * (line.p1[1] + line.p2[1]) // scale), x] = 1
+
+        return map
+
+    def filter_position(self):
+
+        cur_pos = self.measured_position()
+        if (len(self.time) >= 2):
+            self.time.append(self.time[-1]+1)
+            d_vit = self.measured_velocity()
+
+            d_pos = 0.5*(np.array([[d_vit[0]], [d_vit[1]]])+self.l_vit[-1])
+
+            k_pos = 0.006
+            pos1 = self.l_pos[-1]+d_pos  # rot.dot(d_pos)
+            pos2 = np.array([[cur_pos[0]], [cur_pos[1]]])
+            mix = k_pos*pos2 + (1-k_pos)*pos1
+            self.l_pos.append(mix)
+
+            self.raw_data.append(cur_pos)
+
+            self.l_vit.append(np.array([[d_vit[0]], [d_vit[1]]]))
+        else:
+            self.time.append(0)
+            d_vit = self.measured_velocity()
+            self.l_pos.append(np.array([[cur_pos[0]], [cur_pos[1]]]))
+            self.raw_data.append(cur_pos)
+            self.l_vit.append(np.array([[d_vit[0]], [d_vit[1]]]))
+
+            self.time.append(1)
+        # return self.l_pos[-1]
+
     def update_map(self, lidar_sensor):
-        drone_pos = np.array(self.true_position()).reshape(2, 1)
-        drone_angle = self.true_angle()
+        # drone_pos = np.array(self.true_position()).reshape(2, 1)
+        # drone_angle = self.true_angle()
+
+        drone_pos = self.l_pos[-1]
+        drone_angle = self.measured_angle()
 
         semantic_data = self.semantic_cones().sensor_values
         semantic_angle = semantic_data[0].angle
@@ -83,12 +139,26 @@ class MyWallDrone(DroneAbstract):
                 y_cor = max(min(self.size_area[1] - 1, obstacle_pos[1, 0]), 0)
 
                 if (abs(angle - semantic_angle) <= (5 * math.pi / 180)):
-                    if (semantic_data[semantic_angle_id].entity_type != DroneSemanticCones.TypeEntity.DRONE):
-                        self.map[round(x_cor), round(y_cor)] = 1
-                        new_points.append([x_cor, y_cor])
+                    if (semantic_data[semantic_angle_id].entity_type != DroneSemanticCones.TypeEntity.DRONE) and (semantic_data[semantic_angle_id].entity_type != DroneSemanticCones.TypeEntity.WOUNDED_PERSON):
+                        
+                        if not self.nstep:
+                            self.map[round(x_cor), round(y_cor)] = 1
+                            new_points.append([x_cor, y_cor])
+                        else:
+                            self.accumulator_map[round(y_cor // 5), round(x_cor // 5)] += 1
+                            if self.accumulator_map[round(y_cor // 5), round(x_cor // 5)] == 4:
+                                new_points.append([(x_cor // 5) * 5, (y_cor // 5) * 5])
+
+                    if (semantic_data[semantic_angle_id].entity_type == DroneSemanticCones.TypeEntity.RESCUE_CENTER) and (not self.nstep):
+                        self.base_pos = (round(y_cor // 5), round(x_cor // 5))
                 else:
-                    self.map[round(x_cor), round(y_cor)] = 2
-                    new_points.append([x_cor, y_cor])
+                    if not self.nstep:
+                        self.map[round(x_cor), round(y_cor)] = 2
+                        new_points.append([x_cor, y_cor])
+                    else:
+                        self.accumulator_map[round(y_cor // 5), round(x_cor // 5)] += 1
+                        if self.accumulator_map[round(y_cor // 5), round(x_cor // 5)] == 4:
+                                new_points.append([(x_cor // 5) * 5, (y_cor // 5) * 5])
 
                 try:
                     for e in range(3):
@@ -103,29 +173,35 @@ class MyWallDrone(DroneAbstract):
 
         self.HSpace.add_points_to_process(new_points)
 
+    @mes_perf
     def save_map(self):
         if (self.debug_id != self.identifier):
             return
 
-        W, H = self.size_area
-        NOIR = "0 0 0\n"
-        BLANC = "255 255 255\n"
-        ROUGE = "255 0 0\n"
+        # W, H = self.size_area
+        # NOIR = "0 0 0\n"
+        # BLANC = "255 255 255\n"
+        # ROUGE = "255 0 0\n"
 
-        Color = [BLANC, NOIR, ROUGE]
+        # Color = [BLANC, NOIR, ROUGE]
 
-        with open("cartographer_drone_map.ppm", "w") as f:
-            f.write("P3\n")
-            f.write(f"{W} {H}\n255\n")
-            for i in range(H):
-                for j in range(W):
-                    f.write(Color[int(self.map[j, i])])
+        # with open("cartographer_drone_map.ppm", "w") as f:
+        #     f.write("P3\n")
+        #     f.write(f"{W} {H}\n255\n")
+        #     for i in range(H):
+        #         for j in range(W):
+        #             f.write(Color[int(self.map[j, i])])
 
-        img =   cv2.imread("/home/antoine/PIE/swarm-rescue/src/swarm_rescue/cartographer_drone_map.ppm")
-        self.HSpace.background = img
+        # img =   cv2.imread("/home/antoine/PIE/swarm-rescue/src/swarm_rescue/cartographer_drone_map.ppm")
+        # self.HSpace.background = img
 
         self.HSpace.point_transform()
-        self.HSpace.draw_90deg_lines_length()
+        # self.HSpace.draw_90deg_lines_length()
+        self.HSpace.compute_lines_length()
+        map = self.draw_map(5)
+
+        # plt.imshow(map)
+        # plt.show()
 
     def turn_90(self, direction):
         """
@@ -217,16 +293,30 @@ class MyWallDrone(DroneAbstract):
     def get_next_target(self):
 
         def middle(line):
-            return [(line.p1[0] + line.p2[0])/2, (line.p1[1] + line.p2[1])/2]
+            return np.array([(line.p1[0] + line.p2[0])/2, (line.p1[1] + line.p2[1])/2])
+
+        pos = self.l_pos[-1].reshape((1, 2))
 
         doors = self.HSpace.data_doors
-        door_index, door_pos = 0, [0, 0]
+        door_index, door_pos = 0, middle(doors[0])
+        min_dist = np.sqrt(np.power(door_pos - pos, 2))
+
+        for i, door in enumerate(doors[1:]):
+            if door.visited:
+                continue
+
+            p = middle(door)
+            d = np.sqrt(np.power(p - pos, 2))
+
+            if d < min_dist:
+                door_index = i + 1
+                door_pos = p
+                min_dist = d
 
         return [door_index, door_pos]
 
-    def correct_door_to_wall(self, door_id):
+    def correct_door_to_wall(self, door_pos):
         pass
-
 
     def control(self):
 
@@ -236,11 +326,16 @@ class MyWallDrone(DroneAbstract):
                    self.grasp: 0}
         distance_max = 20
 
-        if not (self.nstep % 15):
+        self.filter_position()
+
+        if not (self.nstep % 2):
             self.update_map(self.lidar())
         if not (self.nstep % 50):
             self.save_map()
+            self.accumulator_map = np.zeros(self.accumulator_map.shape)
         self.nstep += 1
+
+
 
         values = self.process_lidar_sensor(self.lidar())
         if self.state is self.Activity.SEARCHING:
