@@ -823,7 +823,7 @@ class MyWallPathDrone(DroneAbstract):
             look_shortcut.reverse()
             for n, i in enumerate(look_shortcut):
                 d = np.linalg.norm(i - self.l_pos[-1])
-                if d < 7:
+                if d < 9:
                     self.next_pos_to_go = self.next_pos_to_go[n-1:]
                     break
         x_diff = destination[0][0]-x
@@ -837,9 +837,9 @@ class MyWallPathDrone(DroneAbstract):
         alpha_diff = normalize_angle(alpha-a2)
 
         if alpha_diff < 0:
-            command[self.rotation_velocity] -= 0.6
+            command[self.rotation_velocity] -= 0.5
         elif alpha_diff > 0:
-            command[self.rotation_velocity] += 0.6
+            command[self.rotation_velocity] += 0.5
             
         ######### Compute the cone sensor to see if there is drone around and correct his goal ###########################
         
@@ -862,14 +862,15 @@ class MyWallPathDrone(DroneAbstract):
                     print("error")
         if (len(l_supposed_pos) != 0) :
             final_pos = sum(l_supposed_pos)/len(l_supposed_pos)
-            self.next_pos_to_go[-1] = final_pos        
+            self.next_pos_to_go = [final_pos]        
         #print(np.linalg.norm(self.l_pos[-1] - np.array([[self.true_position()[0]],[self.true_position()[1]]])))
 
         destination = self.l_pos[-1]
+        #try to debug if they are blocked
         try :
             somme = 0
-            for i in range(20) :
-                somme += np.linalg.norm(self.l_pos[-1]-self.l_pos[-i])/20
+            for i in range(10) :
+                somme += np.linalg.norm(self.l_pos[-1]-self.l_pos[-i])/10
             if somme < 5 :
                 self.next_pos_to_go.pop(0)
         except :
