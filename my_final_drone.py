@@ -878,11 +878,11 @@ class MyWallPathDrone(DroneAbstract):
         #    self.next_pos_to_go.pop(0)
 
         
-        command[self.longitudinal_force] = 0.4 - exp(-distance_from_drone/70)
+        command[self.longitudinal_force] = 0.6 - exp(-distance_from_drone/70)
             
         if is_alone and distance_from_drone >= 10:
             command[self.longitudinal_force] = max(
-            0.4 - exp(-distance_from_drone/70), 0.1)
+            0.6 - exp(-distance_from_drone/70), 0.1)
         
         return command
 
