@@ -41,9 +41,9 @@ class MyWallPathDrone(DroneAbstract):
 
         # States for the Rescuing drone
         STARTING = auto()
+        STAND_BY = auto()
         GO_GETEM = auto()
         BRING_TO_RESCUE = auto()
-        STAND_BY = auto()
         GO_TO_SLEEP = auto()
 
     class Type(Enum):
@@ -99,6 +99,7 @@ class MyWallPathDrone(DroneAbstract):
         self.rescue_center_pos = [0, 0]
         self.next_pos_to_go = []
         self.chief_pos = np.array([[0.0], [0.0]])
+        self.send_cartography = False
 
     def define_message(self):
         """
@@ -107,7 +108,11 @@ class MyWallPathDrone(DroneAbstract):
         dest = self.identifier + 1
         try:
             x, y = self.get_pos()
-            return [self.identifier, dest, np.array([x, y]), self.state]
+            if self.send_cartography:
+                self.send_cartography = False
+                return [self.identifier, dest, np.array([x, y]), self.state, self.HSpace.data_walls, self.explored_map]
+            else:
+                return [self.identifier, dest, np.array([x, y]), self.state, None, None]
         except:
             pass
 
@@ -180,7 +185,7 @@ class MyWallPathDrone(DroneAbstract):
                 try:
                     msg = msg[1]
                     other_pos = msg[2]
-                    if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) < 200 and msg[0] != 2:
+                    if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) < 200 and msg[0] != self.identifier:
                         return False
 
                 except Exception:
@@ -222,8 +227,10 @@ class MyWallPathDrone(DroneAbstract):
                     pos = np.array([[message[2][0]], [message[2][1]]])
                     if message[1] == self.identifier and message[0] == self.identifier - 1:
                         self.next_pos_to_go.append(pos)
-                    elif message[1] == 0:
-                        self.chief_pos = pos
+                    
+                    if (message[4] != None) and (message[5] != None):
+                        self.merge_maps(message[4], message[5])
+
                 except:
                     print("error")
                     pass
@@ -256,7 +263,23 @@ class MyWallPathDrone(DroneAbstract):
 
                 self.data_walls = new_data[:]
 
-        self.explored_map = np.bitwise_and(self.explored_map, other_exploration)
+        self.explored_map = np.logical_and(self.explored_map, other_exploration)
+
+    def process_communication_sensor_follower(self):
+
+        if self.communication:
+            received_messages = self.communication.received_message
+            for message in received_messages:
+                try:
+                    message = message[1]
+                    pos = np.array([[message[2][0]], [message[2][1]]])
+                    if message[1] == self.identifier and message[0] == self.identifier - 1:
+                        self.next_pos_to_go.append(pos)
+                    elif message[1] == 0:
+                        self.chief_pos = pos
+                except:
+                    print("error")
+                    pass
 
     def filter_position(self):
 
@@ -409,14 +432,15 @@ class MyWallPathDrone(DroneAbstract):
 
         for r in self.semantic_cones().sensor_values:
             if r.entity_type == DroneSemanticCones.TypeEntity.RESCUE_CENTER:
-                obstacle_pos = r.distance * \
-                    np.dot(rot(drone_angle + r.angle),
-                           np.array([1, 0]).reshape(2, 1)) + drone_pos
-                points.append(obstacle_pos)
+                obstacle_pos = r.distance * np.dot(rot(drone_angle + r.angle), np.array([1, 0]).reshape(2, 1)) + drone_pos
+                x_cor = max(min(self.size_area[0] - 1, obstacle_pos[0, 0]), 0)
+                y_cor = max(min(self.size_area[1] - 1, obstacle_pos[1, 0]), 0)
+                points.append([x_cor, y_cor])
 
         self.rescue_HSpace.add_points_to_process(points)
 
     def set_anchor_pos(self):
+        self.rescue_HSpace.point_transform()
         lines = self.rescue_HSpace.compute_lines_length()
         tx, ty = self.get_pos()
         pos = np.array([tx, ty])
@@ -429,11 +453,24 @@ class MyWallPathDrone(DroneAbstract):
             x = int((l.p1[0] + l.p2[0]) // 2)
             y = int((l.p1[1] + l.p2[1]) // 2)
 
-        ext_norm = (pos - self.rescue_center_pos)
-
         self.rescue_center_pos = np.array([x, y])
-        self.stand_by_pos = self.rescue_center_pos + 50 * \
-            ext_norm / np.sqrt(np.dot(ext_norm, ext_norm))
+
+        x_sb, y_sb = x, y
+        DISTANCE_FROM_CENTER = 50
+
+        if l.orientation:   # Droite verticale
+            if tx > x:
+                x_sb += DISTANCE_FROM_CENTER
+            else:
+                x_sb -= DISTANCE_FROM_CENTER
+
+        else:
+            if ty > y:
+                y_sb += DISTANCE_FROM_CENTER
+            else:
+                y_sb -= DISTANCE_FROM_CENTER
+        
+        self.stand_by_pos = np.array([x_sb, y_sb])
 
         return True
 
@@ -751,16 +788,25 @@ class MyWallPathDrone(DroneAbstract):
     def control_follower(self):
         self.filter_position()
         self.process_communication_sensor_follower()
+        values = self.semantic_cones().sensor_values
+
         command = {self.longitudinal_force: 0.0,
                    self.lateral_force: 0.0,
                    self.rotation_velocity: 0.0,
                    self.grasp: 0}
 
-        destination= self.l_pos[-1]
-        distance_from_drone = 0.0
-        ###############  Get the next pos to go depending on the leader instructions and some others shit #################################
+        is_a_drone = False
+        cones = self.semantic_cones().sensor_values
+        for v in cones:
+            if v.entity_type == DroneSemanticCones.TypeEntity.DRONE:
+                is_a_drone = True
+                break
+
+        x, y = self.l_pos[-1][0][0], self.l_pos[-1][1][0]
+        destination = self.l_pos[-1]
+        distance_from_drone = 0
         if len(self.next_pos_to_go) >= 1:
-    
+
             destination = self.next_pos_to_go[0]
 
             distance_from_drone = np.linalg.norm(
@@ -770,88 +816,80 @@ class MyWallPathDrone(DroneAbstract):
             look_shortcut.reverse()
             for n, i in enumerate(look_shortcut):
                 d = np.linalg.norm(i - self.l_pos[-1])
-                if d < 10:
-                    self.next_pos_to_go = self.next_pos_to_go[len(look_shortcut) - n-2:]
+                if d < 7:
+                    self.next_pos_to_go = self.next_pos_to_go[n-1:]
                     break
-        ############ Get the angle to compute ##############################
-        x, y = self.l_pos[-1][0][0], self.l_pos[-1][1][0]
         x_diff = destination[0][0]-x
         y_diff = destination[1][0]-y
-        
+        # x = min(int(x), self.size_area[0])
+        # y = min(int(y), self.size_area[1])
+
         alpha = atan2(y_diff, x_diff)
         alpha = normalize_angle(alpha)
         a2 = normalize_angle(self.measured_angle())
         alpha_diff = normalize_angle(alpha-a2)
+
         if alpha_diff < 0:
-            command[self.rotation_velocity] -= 0.5
+            command[self.rotation_velocity] -= 0.2
         elif alpha_diff > 0:
-            command[self.rotation_velocity] += 0.5
-            
-        ######### Compute the cone sensor to see if there is drone around and correct his goal ###########################
-        cones = self.semantic_cones().sensor_values
-        l_supposed_pos = []
-        is_alone = False
-        print(np.linalg.norm(self.l_pos[-1] - np.array([[self.true_position()[0]],[self.true_position()[1]]])))
+            command[self.rotation_velocity] += 0.2
 
-        destination = self.l_pos[-1]
+        if distance_from_drone > 100:
+            self.next_pos_to_go.pop(0)
 
-        #if distance_from_drone > 100:
-        #    self.next_pos_to_go.pop(0)
+        if not is_a_drone:
+            distance_from_drone = 80
 
-        
-        command[self.longitudinal_force] = 0.4 - exp(-distance_from_drone/60)
-            
-        if is_alone and distance_from_drone >= 10:
-            command[self.longitudinal_force] = max(
-            0.4 - exp(-distance_from_drone/60), 0.1)
+        d_chief = np.linalg.norm(self.chief_pos-self.l_pos[-1])
+        if d_chief < 100:
+            distance_from_drone = d_chief
+        command[self.longitudinal_force] = max(
+            0.4 - exp(-distance_from_drone/50), -0.2)
         return command
 
     def control_rescue(self):
         self.filter_position()
-        backleft_index = 11
-        left_index = 22
-        frontleft_index = 33
-        front_index = 44
-        frontright_index = 55
-        right_index = 67
-        backright_index = 77
 
         command = {self.longitudinal_force: 0.0,
                    self.lateral_force: 0.0,
                    self.rotation_velocity: 0.0,
                    self.grasp: 0}
-        distance_max = 20
 
         x, y = self.get_pos()
+        pos = np.array([x, y])
         x = min(int(x), self.size_area[0])//self.scale
         y = min(int(y), self.size_area[1])//self.scale
         self.update_last_20_pos(self.last_20_pos, (y, x))
-
-        values = self.process_lidar_sensor(self.lidar())
 
         if self.state == self.Activity.STARTING:
             if self.nstep < 30:
                 self.get_rescue_center()
 
             elif not self.found_rescue_center:
+                self.get_rescue_center()
                 self.found_rescue_center = self.set_anchor_pos()
 
                 if self.found_rescue_center:
                     self.state = self.Activity.GO_TO_SLEEP
 
+            command[self.rotation_velocity] = 0.5
+
         elif self.state == self.Activity.STAND_BY:
-            if self.process_communication_sensor_rescue() and self.process_semantic_sensor_wounded(self.semantic_cones()):
+            if self.process_communication_sensor() and (self.process_semantic_sensor_wounded(self.semantic_cones()) != (0.0, 0.0)):
                 self.state = self.Activity.GO_GETEM
+
+            elif np.sqrt(np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos)) > 40:
+                self.state = self.Activity.GO_TO_SLEEP
 
         elif self.state is self.Activity.GO_GETEM:
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
                 self.semantic_cones())
             if wounded_person_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
             elif wounded_person_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
             if wounded_person_distance < 20 and wounded_person_distance > 0:
                 command[self.grasp] = 1
@@ -871,20 +909,19 @@ class MyWallPathDrone(DroneAbstract):
             a2 = normalize_angle(self.measured_angle())
             alpha_diff = normalize_angle(alpha-a2)
 
-            rescue_center_angle, rescue_center_distance = alpha_diff, np.sqrt(
-                np.dot(pos - self.rescue_center_pos, pos - self.rescue_center_pos))
+            rescue_center_angle, rescue_center_distance = alpha_diff, np.sqrt(np.dot(pos - self.rescue_center_pos, pos - self.rescue_center_pos))
 
             if rescue_center_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
             elif rescue_center_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
             if rescue_center_distance < 20 and rescue_center_distance > 0:
                 command[self.grasp] = 1
                 self.state = self.Activity.GO_TO_SLEEP
-
+        
         elif self.state is self.Activity.GO_TO_SLEEP:
             x, y = self.get_pos()
 
@@ -898,20 +935,26 @@ class MyWallPathDrone(DroneAbstract):
             a2 = normalize_angle(self.measured_angle())
             alpha_diff = normalize_angle(alpha-a2)
 
-            stand_by_angle, stand_by_distance = alpha_diff, np.sqrt(
-                np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos))
+            stand_by_angle, stand_by_distance = alpha_diff, np.sqrt(np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos))
 
             if stand_by_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
             elif stand_by_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
             if stand_by_distance < 20 and stand_by_distance > 0:
-                command[self.grasp] = 1
                 self.state = self.Activity.STAND_BY
-            self.nstep += 1
+
+
+        touch_value = self.process_touch_sensor()
+        if touch_value == "left":
+            command[self.lateral_force] = self.base_speed
+        elif touch_value == "right":
+            command[self.lateral_force] = -self.base_speed
+
+        self.nstep += 1
 
         return command
 
