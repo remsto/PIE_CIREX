@@ -239,12 +239,12 @@ class MyWallPathDrone(DroneAbstract):
                     if message[1] == self.identifier and message[0] == self.identifier - 1:
                         self.next_pos_to_go.append(pos)
 
-                    if (message[4] != None) and (message[5] != None):
+                    if (not message[4] is None) and (not message[5] is None):
                         self.merge_maps(message[4], message[5])
 
                 except Exception as e:
                     print(e)
-                    print("error")
+                    print("error merging")
                     pass
 
     def merge_maps(self, other_walls, other_exploration):
