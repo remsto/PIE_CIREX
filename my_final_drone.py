@@ -1027,10 +1027,10 @@ class MyWallPathDrone(DroneAbstract):
         return command
 
     def control(self):
-        if self.type is self.Type.LEADER_RIGHT or self.type is self.Type.LEADER_LEFT:
+        if self.type is self.Type.LEADER_RIGHT or self.type is self.Type.LEADER_LEFT or self.type is self.Type.FOLLOWER:
             self.send_cartography = not (self.nstep % 50)
             return self.control_leader()
-        elif self.type is self.Type.FOLLOWER:
+        if self.type is self.Type.FOLLOWER:
             return self.control_follower()
         elif self.type is self.Type.RESCUE:
             return self.control_rescue()
