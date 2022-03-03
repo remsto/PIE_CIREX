@@ -56,8 +56,12 @@ class MyWallPathDrone(DroneAbstract):
                          should_display_lidar=False,
                          **kwargs)
 
-        self.type = self.Type.RESCUE if self.identifier == 8 else self.Type.LEADER
-        self.type = self.Type.LEADER if self.identifier == 0 or self.identifier == 4 else self.Type.FOLLOWER
+        if self.identifier == 0 or self.identifier == 4:
+            self.type = self.Type.LEADER
+        elif self.identifier == 8:
+            self.type = self.Type.RESCUE
+        else:
+            self.type = self.Type.FOLLOWER
 
         # State of the drone from the Enum Activity class
         if self.type is self.Type.LEADER:
@@ -82,6 +86,8 @@ class MyWallPathDrone(DroneAbstract):
         self.time = []
         self.accumulator_map = np.zeros(
             (round(self.size_area[1] // self.scale) + 1, round(self.size_area[0] // 5) + 1))
+        self.update_rate = 5
+        self.save_rate = 100
 
         self.map = np.zeros(self.size_area)
         self.explored_map = np.ones((
@@ -498,9 +504,9 @@ class MyWallPathDrone(DroneAbstract):
         values = self.process_lidar_sensor(self.lidar())
 
         if self.state is self.Activity.SEARCHING_RIGHT:
-            if not (self.nstep % 15):
+            if not (self.nstep % self.update_rate):
                 self.update_map(self.lidar())
-            if not (self.nstep % 200):
+            if not (self.nstep % 100):
                 self.save_map()
                 self.accumulator_map = np.zeros(self.accumulator_map.shape)
             wall_front = values[front_index] < distance_max
@@ -528,9 +534,9 @@ class MyWallPathDrone(DroneAbstract):
             if wounded_person_angle != 0 and self.process_communication_sensor_explore():
                 self.state = self.Activity.FOUND_WOUNDED_FAR
         elif self.state is self.Activity.SEARCHING_LEFT:
-            if not (self.nstep % 15):
+            if not (self.nstep % self.update_rate):
                 self.update_map(self.lidar())
-            if not (self.nstep % 200):
+            if not (self.nstep % 100):
                 self.save_map()
                 self.accumulator_map = np.zeros(self.accumulator_map.shape)
             wall_front = values[front_index] < distance_max
@@ -560,9 +566,9 @@ class MyWallPathDrone(DroneAbstract):
                 self.state = self.Activity.FOUND_WOUNDED_FAR
 
         elif self.state is self.Activity.FOUND_WOUNDED_FAR:
-            if not (self.nstep % 15):
+            if not (self.nstep % self.update_rate):
                 self.update_map(self.lidar())
-            if not (self.nstep % 200):
+            if not (self.nstep % 100):
                 self.save_map()
                 self.accumulator_map = np.zeros(self.accumulator_map.shape)
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
@@ -579,9 +585,9 @@ class MyWallPathDrone(DroneAbstract):
                 command[self.grasp] = 1
                 self.state = self.Activity.FOUND_WOUNDED_SCAN
         elif self.state is self.Activity.FOUND_WOUNDED_NEAR:
-            if not (self.nstep % 15):
+            if not (self.nstep % self.update_rate):
                 self.update_map(self.lidar())
-            if not (self.nstep % 200):
+            if not (self.nstep % 100):
                 self.save_map()
                 self.accumulator_map = np.zeros(self.accumulator_map.shape)
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
@@ -599,7 +605,7 @@ class MyWallPathDrone(DroneAbstract):
             command[self.grasp] = 1
             command[self.rotation_velocity] = 0.2
             self.n_local_step += 1
-            if not (self.nstep % 15):
+            if not (self.nstep % self.update_rate):
                 self.update_map(self.lidar())
             if not (self.nstep % 100):
                 self.save_map()
@@ -680,7 +686,7 @@ class MyWallPathDrone(DroneAbstract):
                     command[self.longitudinal_force] = -self.base_speed/2
                 else:
                     command[self.longitudinal_force] = self.base_speed
-            if not self.nstep % 200:
+            if not self.nstep % 100:
                 try:
                     self.path = []
                     x, y = self.get_pos()
@@ -718,7 +724,7 @@ class MyWallPathDrone(DroneAbstract):
                     command[self.longitudinal_force] = -self.base_speed/2
                 else:
                     command[self.longitudinal_force] = self.base_speed
-            if not self.nstep % 200:
+            if not self.nstep % 100:
                 try:
                     self.path = []
                     x, y = self.get_pos()
@@ -768,7 +774,7 @@ class MyWallPathDrone(DroneAbstract):
             command[self.longitudinal_force] = -1
             command[self.lateral_force] = -1 if self.nstep % 2 == 0 else 1
             command[self.grasp] = 1
-            self.last_20_pos = [(i, i) for i in range(200)]
+            self.last_20_pos = [(i, i) for i in range(100)]
             self.state = self.Activity.SEARCHING_RIGHT if self.identifier % 2 == 0 else self.Activity.SEARCHING_LEFT
 
         touch_value = self.process_touch_sensor()
