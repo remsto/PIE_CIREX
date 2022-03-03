@@ -699,10 +699,10 @@ class MyWallPathDrone(DroneAbstract):
                 y = values[frontleft_index]
                 if y > x/cos(alpha) + self.epsilon:
                     command[self.rotation_velocity] = -self.base_rot_speed
-                    command[self.longitudinal_force] = -self.base_speed/2
+                    command[self.longitudinal_force] = self.base_speed - self.base_speed*(1-y/300)
                 elif y < x/cos(alpha) - self.epsilon:
                     command[self.rotation_velocity] = self.base_rot_speed
-                    command[self.longitudinal_force] = -self.base_speed/2
+                    command[self.longitudinal_force] = self.base_speed - self.base_speed*(1-y/300)
                 else:
                     command[self.longitudinal_force] = self.base_speed
             if not self.nstep % 100:
@@ -737,10 +737,10 @@ class MyWallPathDrone(DroneAbstract):
                 y = values[frontright_index]
                 if y > x/cos(alpha) + self.epsilon:
                     command[self.rotation_velocity] = self.base_rot_speed
-                    command[self.longitudinal_force] = -self.base_speed/2
+                    command[self.longitudinal_force] = self.base_speed - self.base_speed*(1-y/300)
                 elif y < x/cos(alpha) - self.epsilon:
                     command[self.rotation_velocity] = -self.base_rot_speed
-                    command[self.longitudinal_force] = -self.base_speed/2
+                    command[self.longitudinal_force] = self.base_speed - self.base_speed*(1-y/300)
                 else:
                     command[self.longitudinal_force] = self.base_speed
             if not self.nstep % 100:
