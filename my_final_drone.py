@@ -15,7 +15,7 @@ from spg_overlay.utils import normalize_angle
 
 from solutions.algorithme_astar import astar
 
-from .KHT import *
+from solutions.KHT import *
 
 
 def rot(angle):
@@ -233,6 +233,36 @@ class MyWallPathDrone(DroneAbstract):
                 except:
                     print("error")
                     pass
+
+    def merge_maps(self, other_walls, other_exploration):
+        for w in other_walls:
+            if not len(self.HSpace.data_walls):
+                self.HSpace.data_walls.append(w)
+
+            else:
+                new_data = []
+                affected_walls = []
+
+                for l in self.HSpace.data_walls:
+                    res = l.compare_walls(w)
+                    if res:
+                        affected_walls.append(res)
+                    else:
+                        new_data.append(l)
+
+                if (len(affected_walls)):
+                    new_data.append(affected_walls[0])
+
+                    if (len(affected_walls) > 1):
+                        for a in affected_walls[1:]:
+                            new_data[-1] = a.compare_walls(new_data[-1])
+
+                else:
+                    new_data.append(w)
+
+                self.data_walls = new_data[:]
+
+        self.explored_map = np.bitwise_and(self.explored_map, other_exploration)
 
     def filter_position(self):
 
@@ -727,25 +757,16 @@ class MyWallPathDrone(DroneAbstract):
     def control_follower(self):
         self.filter_position()
         self.process_communication_sensor_follower()
-        values = self.semantic_cones().sensor_values
-
         command = {self.longitudinal_force: 0.0,
                    self.lateral_force: 0.0,
                    self.rotation_velocity: 0.0,
                    self.grasp: 0}
 
-        is_a_drone = False
-        cones = self.semantic_cones().sensor_values
-        for v in cones:
-            if v.entity_type == DroneSemanticCones.TypeEntity.DRONE:
-                is_a_drone = True
-                break
-
-        x, y = self.l_pos[-1][0][0], self.l_pos[-1][1][0]
-        destination = self.l_pos[-1]
-        distance_from_drone = 0
+        destination= self.l_pos[-1]
+        distance_from_drone = 0.0
+        ###############  Get the next pos to go depending on the leader instructions and some others shit #################################
         if len(self.next_pos_to_go) >= 1:
-
+    
             destination = self.next_pos_to_go[0]
 
             distance_from_drone = np.linalg.norm(
@@ -755,35 +776,40 @@ class MyWallPathDrone(DroneAbstract):
             look_shortcut.reverse()
             for n, i in enumerate(look_shortcut):
                 d = np.linalg.norm(i - self.l_pos[-1])
-                if d < 7:
-                    self.next_pos_to_go = self.next_pos_to_go[n-1:]
+                if d < 10:
+                    self.next_pos_to_go = self.next_pos_to_go[len(look_shortcut) - n-2:]
                     break
+        ############ Get the angle to compute ##############################
+        x, y = self.l_pos[-1][0][0], self.l_pos[-1][1][0]
         x_diff = destination[0][0]-x
         y_diff = destination[1][0]-y
-        # x = min(int(x), self.size_area[0])
-        # y = min(int(y), self.size_area[1])
-
+        
         alpha = atan2(y_diff, x_diff)
         alpha = normalize_angle(alpha)
         a2 = normalize_angle(self.measured_angle())
         alpha_diff = normalize_angle(alpha-a2)
-
         if alpha_diff < 0:
-            command[self.rotation_velocity] -= 0.2
+            command[self.rotation_velocity] -= 0.5
         elif alpha_diff > 0:
-            command[self.rotation_velocity] += 0.2
+            command[self.rotation_velocity] += 0.5
+            
+        ######### Compute the cone sensor to see if there is drone around and correct his goal ###########################
+        cones = self.semantic_cones().sensor_values
+        l_supposed_pos = []
+        is_alone = False
+        print(np.linalg.norm(self.l_pos[-1] - np.array([[self.true_position()[0]],[self.true_position()[1]]])))
 
-        if distance_from_drone > 100:
-            self.next_pos_to_go.pop(0)
+        destination = self.l_pos[-1]
 
-        if not is_a_drone:
-            distance_from_drone = 80
+        #if distance_from_drone > 100:
+        #    self.next_pos_to_go.pop(0)
 
-        d_chief = np.linalg.norm(self.chief_pos-self.l_pos[-1])
-        if d_chief < 100:
-            distance_from_drone = d_chief
-        command[self.longitudinal_force] = max(
-            0.4 - exp(-distance_from_drone/50), -0.2)
+        
+        command[self.longitudinal_force] = 0.4 - exp(-distance_from_drone/60)
+            
+        if is_alone and distance_from_drone >= 10:
+            command[self.longitudinal_force] = max(
+            0.4 - exp(-distance_from_drone/60), 0.1)
         return command
 
     def control_rescue(self):
