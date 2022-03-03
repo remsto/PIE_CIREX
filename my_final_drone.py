@@ -27,6 +27,11 @@ class MyWallPathDrone(DroneAbstract):
         """
         Possible states of the drone
         """
+
+        # States of initialisation
+
+        INITIALISATION = auto()
+
         # States for the Leader drones
         SEARCHING_RIGHT = auto()
         SEARCHING_LEFT = auto()
@@ -66,15 +71,19 @@ class MyWallPathDrone(DroneAbstract):
         else:
             self.type = self.Type.FOLLOWER
 
+        self.state = self.Activity.INITIALISATION
+
         # State of the drone from the Enum Activity class
         if self.type is self.Type.LEADER_LEFT:
-            self.state = self.Activity.SEARCHING_LEFT
+            self.init_state = self.Activity.SEARCHING_LEFT
         elif self.type is self.Type.LEADER_RIGHT:
-            self.state = self.Activity.SEARCHING_RIGHT
+            self.init_state = self.Activity.SEARCHING_RIGHT
         elif self.type is self.Type.FOLLOWER:
-            self.state = self.Activity.SEARCHING_RIGHT if self.identifier <= 1 else self.Activity.SEARCHING_LEFT
+            self.init_state = self.Activity.SEARCHING_RIGHT if self.identifier <= 1 else self.Activity.SEARCHING_LEFT
         else:
-            self.state = self.Activity.STARTING
+            self.init_state = self.Activity.STARTING
+
+        # self.state = self.init_state
 
         # Constants for the drone
         self.last_dist = 0
@@ -500,7 +509,13 @@ class MyWallPathDrone(DroneAbstract):
 
         values = self.process_lidar_sensor(self.lidar())
 
-        if self.state is self.Activity.SEARCHING_RIGHT:
+        if self.state is self.Activity.INITIALISATION:
+            waiting_ticks = [0, 0, 0, 0, 200, 200, 200, 200, 400, 400]
+
+            if self.nstep > waiting_ticks[self.identifier]:
+                self.state = self.init_state
+
+        elif self.state is self.Activity.SEARCHING_RIGHT:
             if not (self.nstep % self.update_rate):
                 self.update_map(self.lidar())
             if not (self.nstep % 100):
@@ -802,6 +817,16 @@ class MyWallPathDrone(DroneAbstract):
                    self.rotation_velocity: 0.0,
                    self.grasp: 0}
 
+
+        if self.state is self.Activity.INITIALISATION:
+            waiting_ticks = [0, 0, 0, 0, 200, 200, 200, 200, 400, 400]
+
+            if self.nstep > waiting_ticks[self.identifier]:
+                self.state = self.init_state
+            else:
+                self.nstep += 1
+                return command
+
         is_a_drone = False
         cones = self.semantic_cones().sensor_values
         for v in cones:
@@ -909,8 +934,14 @@ class MyWallPathDrone(DroneAbstract):
         y = min(int(y), self.size_area[1])//self.scale
         self.update_last_20_pos(self.last_20_pos, (y, x))
 
-        if self.state == self.Activity.STARTING:
-            if self.nstep < 30:
+        if self.state is self.Activity.INITIALISATION:
+            waiting_ticks = [0, 0, 0, 0, 200, 200, 200, 200, 400, 400]
+
+            if self.nstep > waiting_ticks[self.identifier]:
+                self.state = self.init_state
+
+        elif self.state == self.Activity.STARTING:
+            if self.nstep < 280:
                 self.get_rescue_center()
 
             elif not self.found_rescue_center:
