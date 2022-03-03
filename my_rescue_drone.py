@@ -39,7 +39,7 @@ class MyRescueDrone(DroneAbstract):
                          **kwargs)
 
         # State of the drone from the Enum Activity class
-        self.state = self.Activity.STAND_BY
+        self.state = self.Activity.STARTING
 
         # Constants for the drone
         self.last_right_state = last_right_state
@@ -202,11 +202,14 @@ class MyRescueDrone(DroneAbstract):
         for r in self.semantic_cones().sensor_values:
             if r.entity_type == DroneSemanticCones.TypeEntity.RESCUE_CENTER:
                 obstacle_pos = r.distance * np.dot(rot(drone_angle + r.angle), np.array([1, 0]).reshape(2, 1)) + drone_pos
-                points.append(obstacle_pos)
+                x_cor = max(min(self.size_area[0] - 1, obstacle_pos[0, 0]), 0)
+                y_cor = max(min(self.size_area[1] - 1, obstacle_pos[1, 0]), 0)
+                points.append([x_cor, y_cor])
 
         self.rescue_HSpace.add_points_to_process(points)
 
     def set_anchor_pos(self):
+        self.rescue_HSpace.point_transform()
         lines = self.rescue_HSpace.compute_lines_length()
         tx, ty = self.get_pos()
         pos = np.array([tx, ty])
@@ -219,14 +222,29 @@ class MyRescueDrone(DroneAbstract):
             x = int((l.p1[0] + l.p2[0]) // 2)
             y = int((l.p1[1] + l.p2[1]) // 2)
 
-        ext_norm = (pos - self.rescue_center_pos)
-
         self.rescue_center_pos = np.array([x, y])
-        self.stand_by_pos = self.rescue_center_pos + 50 * ext_norm / np.sqrt(np.dot(ext_norm, ext_norm))
+
+        x_sb, y_sb = x, y
+        DISTANCE_FROM_CENTER = 50
+
+        if l.orientation:   # Droite verticale
+            if tx > x:
+                x_sb += DISTANCE_FROM_CENTER
+            else:
+                x_sb -= DISTANCE_FROM_CENTER
+
+        else:
+            if ty > y:
+                y_sb += DISTANCE_FROM_CENTER
+            else:
+                y_sb -= DISTANCE_FROM_CENTER
+        
+        self.stand_by_pos = np.array([x_sb, y_sb])
 
         return True
 
     def control(self):
+        print(self.state)
         self.filter_position()
 
         command = {self.longitudinal_force: 0.0,
@@ -235,6 +253,7 @@ class MyRescueDrone(DroneAbstract):
                    self.grasp: 0}
 
         x, y = self.get_pos()
+        pos = np.array([x, y])
         x = min(int(x), self.size_area[0])//self.scale
         y = min(int(y), self.size_area[1])//self.scale
         self.update_last_20_pos(self.last_20_pos, (y, x))
@@ -244,24 +263,30 @@ class MyRescueDrone(DroneAbstract):
                 self.get_rescue_center()
 
             elif not self.found_rescue_center:
+                self.get_rescue_center()
                 self.found_rescue_center = self.set_anchor_pos()
 
                 if self.found_rescue_center:
                     self.state = self.Activity.GO_TO_SLEEP
 
+            command[self.rotation_velocity] = 0.5
+
         elif self.state == self.Activity.STAND_BY:
-            if self.process_communication_sensor() and self.process_semantic_sensor_wounded(self.semantic_cones):
+            if self.process_communication_sensor() and (self.process_semantic_sensor_wounded(self.semantic_cones()) != (0.0, 0.0)):
                 self.state = self.Activity.GO_GETEM
+
+            elif np.sqrt(np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos)) > 40:
+                self.state = self.Activity.GO_TO_SLEEP
 
         elif self.state is self.Activity.GO_GETEM:
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
                 self.semantic_cones())
             if wounded_person_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
             elif wounded_person_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
             if wounded_person_distance < 20 and wounded_person_distance > 0:
                 command[self.grasp] = 1
@@ -284,11 +309,11 @@ class MyRescueDrone(DroneAbstract):
             rescue_center_angle, rescue_center_distance = alpha_diff, np.sqrt(np.dot(pos - self.rescue_center_pos, pos - self.rescue_center_pos))
 
             if rescue_center_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
             elif rescue_center_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
             if rescue_center_distance < 20 and rescue_center_distance > 0:
                 command[self.grasp] = 1
@@ -310,14 +335,13 @@ class MyRescueDrone(DroneAbstract):
             stand_by_angle, stand_by_distance = alpha_diff, np.sqrt(np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos))
 
             if stand_by_angle < 0:
-                command[self.rotation_velocity] = -self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
             elif stand_by_angle > 0:
-                command[self.rotation_velocity] = self.base_rot_speed
-                command[self.longitudinal_force] = 0.1
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
             if stand_by_distance < 20 and stand_by_distance > 0:
-                command[self.grasp] = 1
                 self.state = self.Activity.STAND_BY
 
 
