@@ -59,9 +59,9 @@ class MyWallPathDrone(DroneAbstract):
 
         if self.identifier == 0:
             self.type = self.Type.LEADER_RIGHT
-        elif self.identifier == 2:
-            self.type = self.Type.LEADER_LEFT
         elif self.identifier == 4:
+            self.type = self.Type.LEADER_LEFT
+        elif self.identifier == 8:
             self.type = self.Type.RESCUE
         else:
             self.type = self.Type.FOLLOWER
@@ -77,6 +77,8 @@ class MyWallPathDrone(DroneAbstract):
             self.state = self.Activity.STARTING
 
         # Constants for the drone
+        self.last_dist = 0
+        self.message_received = False
         self.last_right_state = last_right_state
         self.base_speed = 0.5
         self.base_rot_speed = 1
@@ -231,7 +233,7 @@ class MyWallPathDrone(DroneAbstract):
         return True
 
     def process_communication_sensor_follower(self):
-
+        self.message_received = False
         if self.communication:
             received_messages = self.communication.received_message
             for message in received_messages:
@@ -241,6 +243,7 @@ class MyWallPathDrone(DroneAbstract):
                     if message[1] == self.identifier and message[0] == self.identifier - 1:
                         if message[3] in [self.Activity.FOUND_WOUNDED_FAR, self.Activity.FOUND_WOUNDED_NEAR, self.Activity.FOUND_WOUNDED_SCAN]:
                             self.type = self.Type.LEADER_RIGHT if self.state == self.Activity.SEARCHING_RIGHT else self.Type.LEADER_LEFT
+                        self.message_received = True
                         self.next_pos_to_go.append(pos)
 
                     if (not message[4] is None) and (not message[5] is None):
@@ -853,14 +856,22 @@ class MyWallPathDrone(DroneAbstract):
                 vect = v.distance * rot.dot(np.array([[1], [0]]))
                 other_pos = self.l_pos[-1] + vect
                 try:
-                    if np.linalg.norm(other_pos-self.next_pos_to_go[-1]) < 20:
-                        l_supposed_pos.append(other_pos)
-                        is_alone = False
+                    if self.message_received :
+                        if np.linalg.norm(other_pos-self.next_pos_to_go[-1]) < 20:
+                            l_supposed_pos.append(other_pos)
+                            is_alone = False
+                    else : 
+                        if abs(v.angle) < np.pi/2 and self.last_dist < 300 :
+                            l_supposed_pos.append(other_pos)
+                            is_alone = False
                 except:
                     pass
         if (len(l_supposed_pos) != 0):
             final_pos = sum(l_supposed_pos)/len(l_supposed_pos)
-            self.next_pos_to_go = [final_pos]
+            if self.message_received :
+                self.next_pos_to_go = [final_pos] 
+            else :
+                self.next_pos_to_go.append(final_pos)       
         #print(np.linalg.norm(self.l_pos[-1] - np.array([[self.true_position()[0]],[self.true_position()[1]]])))
 
         destination = self.l_pos[-1]
@@ -880,8 +891,8 @@ class MyWallPathDrone(DroneAbstract):
 
         if is_alone and distance_from_drone >= 10:
             command[self.longitudinal_force] = max(
-                0.6 - exp(-distance_from_drone/70), 0.1)
-
+                0.6 - exp(-distance_from_drone/70), 0.3)
+        self.last_dist = distance_from_drone
         return command
 
     def control_rescue(self):
