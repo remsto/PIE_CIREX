@@ -79,9 +79,11 @@ class MyWallPathDrone(DroneAbstract):
         elif self.type is self.Type.LEADER_RIGHT:
             self.init_state = self.Activity.SEARCHING_RIGHT
         elif self.type is self.Type.FOLLOWER:
-            self.state = self.Activity.SEARCHING_RIGHT if self.identifier <= 3 else self.Activity.SEARCHING_LEFT
+            self.init_state = self.Activity.SEARCHING_RIGHT if self.identifier <= 3 else self.Activity.SEARCHING_LEFT
         else:
             self.init_state = self.Activity.STARTING
+
+        # self.state = self.init_state
 
         # self.state = self.init_state
 
@@ -249,24 +251,11 @@ class MyWallPathDrone(DroneAbstract):
                 try:
                     message = message[1]
                     pos = np.array([[message[2][0]], [message[2][1]]])
-
-                    if message[3] in [self.Activity.FOUND_WOUNDED_FAR, self.Activity.FOUND_WOUNDED_NEAR, self.Activity.FOUND_WOUNDED_SCAN]:
-                        self.type = self.Type.LEADER_RIGHT if self.state == self.Activity.SEARCHING_RIGHT else self.Type.LEADER_LEFT
-                    else:
-                        cones = self.semantic_cones().sensor_values
-                        l_proies = []
-                        l_drones = []
-                        for v in cones:
-
-                            if v.entity_type == DroneSemanticCones.TypeEntity.DRONE:
-                                l_drones.append(v)
-                            elif v.entity_type == DroneSemanticCones.TypeEntity.WOUNDED_PERSON:
-                                l_proies.append(v)
-
-                        if (len(l_proies) != 0 and len(l_drones) != 0):
+                    if message[1] == self.identifier and message[0] == self.identifier - 1:
+                        if message[3] in [self.Activity.FOUND_WOUNDED_FAR, self.Activity.FOUND_WOUNDED_NEAR, self.Activity.FOUND_WOUNDED_SCAN]:
                             self.type = self.Type.LEADER_RIGHT if self.state == self.Activity.SEARCHING_RIGHT else self.Type.LEADER_LEFT
 
-                    if message[1] == self.identifier and message[0] == self.identifier - 1:
+                    
                         self.message_received = True
                         self.next_pos_to_go.append(pos)
 
@@ -499,10 +488,14 @@ class MyWallPathDrone(DroneAbstract):
         values = self.process_lidar_sensor(self.lidar())
 
         if self.state is self.Activity.INITIALISATION:
-            waiting_ticks = [0, 0, 0, 0, 200, 200, 200, 200, 400, 400]
+            waiting_ticks = [0, 0, 0, 0, 150, 150, 150, 150, 300, 300]
 
             if self.nstep > waiting_ticks[self.identifier]:
                 self.state = self.init_state
+
+            else:
+                self.nstep += 1
+                return command
 
         elif self.state is self.Activity.SEARCHING_RIGHT:
             if not (self.nstep % self.update_rate):
@@ -805,7 +798,7 @@ class MyWallPathDrone(DroneAbstract):
 
 
         if self.state is self.Activity.INITIALISATION:
-            waiting_ticks = [0, 0, 0, 0, 200, 200, 200, 200, 400, 400]
+            waiting_ticks = [0, 0, 0, 0, 150, 150, 150, 150, 300, 300]
 
             if self.nstep > waiting_ticks[self.identifier]:
                 self.state = self.init_state
@@ -921,7 +914,7 @@ class MyWallPathDrone(DroneAbstract):
         self.update_last_20_pos(self.last_20_pos, (y, x))
 
         if self.state is self.Activity.INITIALISATION:
-            waiting_ticks = [0, 0, 0, 0, 200, 200, 200, 200, 400, 400]
+            waiting_ticks = [0, 0, 0, 0, 150, 150, 150, 150, 300, 300]
 
             if self.nstep > waiting_ticks[self.identifier]:
                 self.state = self.init_state
