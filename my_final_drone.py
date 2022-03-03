@@ -15,7 +15,7 @@ from spg_overlay.utils import normalize_angle
 
 from solutions.algorithme_astar import astar
 
-from .KHT import *
+from solutions.KHT import *
 
 
 def rot(angle):
@@ -227,6 +227,36 @@ class MyWallPathDrone(DroneAbstract):
                 except:
                     print("error")
                     pass
+
+    def merge_maps(self, other_walls, other_exploration):
+        for w in other_walls:
+            if not len(self.HSpace.data_walls):
+                self.HSpace.data_walls.append(w)
+
+            else:
+                new_data = []
+                affected_walls = []
+
+                for l in self.HSpace.data_walls:
+                    res = l.compare_walls(w)
+                    if res:
+                        affected_walls.append(res)
+                    else:
+                        new_data.append(l)
+
+                if (len(affected_walls)):
+                    new_data.append(affected_walls[0])
+
+                    if (len(affected_walls) > 1):
+                        for a in affected_walls[1:]:
+                            new_data[-1] = a.compare_walls(new_data[-1])
+
+                else:
+                    new_data.append(w)
+
+                self.data_walls = new_data[:]
+
+        self.explored_map = np.bitwise_and(self.explored_map, other_exploration)
 
     def filter_position(self):
 
