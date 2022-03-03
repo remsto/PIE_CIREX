@@ -202,7 +202,6 @@ class MyWallPathDrone(DroneAbstract):
             x, y = self.get_pos()
             pos = np.array([x, y])
         except:
-            print("Erreur")
             return False
 
         if self.communication:
@@ -224,7 +223,6 @@ class MyWallPathDrone(DroneAbstract):
             x, y = self.get_pos()
             pos = np.array([x, y])
         except:
-            print("Erreur")
             return False
 
         if self.communication:
@@ -237,9 +235,6 @@ class MyWallPathDrone(DroneAbstract):
                     if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) < 200 and msg[0] != self.identifier and (other_state in [self.Activity.FOUND_WOUNDED_FAR, self.Activity.FOUND_WOUNDED_NEAR, self.Activity.GOING_BACK, self.Activity.FOUND_WOUNDED_SCAN, self.Activity.GO_GETEM, self.Activity.BRING_TO_RESCUE]):
                         return False
                 except Exception as e:
-                    print(msg)
-                    print("Sah le couz du douze")
-                    print(e)
                     pass
         return True
 
@@ -263,8 +258,6 @@ class MyWallPathDrone(DroneAbstract):
                         self.merge_maps(message[4], message[5])
 
                 except Exception as e:
-                    print(e)
-                    print("error merging")
                     pass
 
     def merge_maps(self, other_walls, other_exploration):
@@ -622,14 +615,11 @@ class MyWallPathDrone(DroneAbstract):
                 try:
                     self.path = self.path_to_points(
                         astar(map_local+self.explored_map, (y, x), self.base_pos), map_local+self.explored_map)
-                    print(self.path)
                     self.reverse_path = list(reversed(self.path))
                     self.reverse_path.pop(0)
                     self.reverse_path.append((y, x))
                 except:
-                    print(
-                        "Astar a merdé, probablement à cause de l'incertitude des mesures")
-                    self.state = self.Activity.BACKUP_RIGHT if self.identifier % 2 == 0 else self.Activity.BACKUP_LEFT
+                    self.state = self.Activity.BACKUP_RIGHT if self.Type is self.Type.LEADER_RIGHT else self.Activity.BACKUP_LEFT
             else:
                 command[self.longitudinal_force] = 0.5
                 destination = self.path[0]
@@ -688,7 +678,6 @@ class MyWallPathDrone(DroneAbstract):
                     y = min(int(y), self.size_area[1])//self.scale
                     self.path = self.path_to_points(
                         astar(map_local+self.explored_map, (y, x), self.base_pos), map_local+self.explored_map)
-                    print(self.path)
                     self.reverse_path = list(reversed(self.path))
                     self.reverse_path.pop(0)
                     self.reverse_path.append((y, x))
@@ -728,7 +717,6 @@ class MyWallPathDrone(DroneAbstract):
                     y = min(int(y), self.size_area[1])//self.scale
                     self.path = self.path_to_points(
                         astar(map_local+self.explored_map, (y, x), self.base_pos), map_local+self.explored_map)
-                    print(self.path)
                     self.reverse_path = list(reversed(self.path))
                     self.reverse_path.pop(0)
                     self.reverse_path.append((y, x))
@@ -876,7 +864,6 @@ class MyWallPathDrone(DroneAbstract):
                 self.next_pos_to_go = [final_pos]
             else:
                 self.next_pos_to_go.append(final_pos)
-        #print(np.linalg.norm(self.l_pos[-1] - np.array([[self.true_position()[0]],[self.true_position()[1]]])))
 
         destination = self.l_pos[-1]
         # try to debug if they are blocked
