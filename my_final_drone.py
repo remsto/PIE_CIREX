@@ -61,8 +61,10 @@ class MyWallPathDrone(DroneAbstract):
             self.type = self.Type.LEADER_RIGHT
         elif self.identifier == 4:
             self.type = self.Type.LEADER_LEFT
-        elif self.identifier == 8:
+        elif self.identifier == 1:
             self.type = self.Type.RESCUE
+        elif self.identifier == 9:
+            self.type = self.Type.LEADER_LEFT
         else:
             self.type = self.Type.FOLLOWER
 
@@ -93,11 +95,13 @@ class MyWallPathDrone(DroneAbstract):
         self.l_true_pos = []
         self.raw_data = []
         self.pos2 = []
+        self.true_ecart = []
         self.time = []
+        self.ecart = []
         self.accumulator_map = np.zeros(
             (round(self.size_area[1] // self.scale) + 1, round(self.size_area[0] // 5) + 1))
         self.update_rate = 5
-        self.save_rate = 100
+        self.save_rate = 50
 
         self.map = np.zeros(self.size_area)
         self.explored_map = np.ones((
@@ -124,7 +128,7 @@ class MyWallPathDrone(DroneAbstract):
         dest = self.identifier + 1
         try:
             x, y = self.get_pos()
-            if self.send_cartography :
+            if self.send_cartography:
                 return [self.identifier, dest, np.array([x, y]), self.state, self.HSpace.data_walls, self.explored_map]
             else:
                 return [self.identifier, dest, np.array([x, y]), self.state, None, None]
@@ -199,7 +203,7 @@ class MyWallPathDrone(DroneAbstract):
                 try:
                     msg = msg[1]
                     other_pos = msg[2]
-                    if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) < 200 and msg[0] != self.identifier and msg[3] == self.Activity.GOING_BACK:
+                    if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) < 100 and msg[0] != self.identifier and msg[3] == self.Activity.GOING_BACK:
                         return False
 
                 except Exception:
@@ -226,9 +230,9 @@ class MyWallPathDrone(DroneAbstract):
                             self.merge_maps(message[4], message[5])
                             self.map_failed = False"""
                     if np.sqrt(np.dot(pos - other_pos, pos - other_pos)) < 200 and msg[0] != self.identifier and (other_state in [self.Activity.FOUND_WOUNDED_FAR, self.Activity.FOUND_WOUNDED_NEAR, self.Activity.GOING_BACK, self.Activity.FOUND_WOUNDED_SCAN, self.Activity.GO_GETEM, self.Activity.BRING_TO_RESCUE]):
-                        
+
                         return False
-                    else :
+                    else:
                         cones = self.semantic_cones().sensor_values
                         l_proies = []
                         l_drones = []
@@ -238,15 +242,15 @@ class MyWallPathDrone(DroneAbstract):
                                 l_drones.append(v)
                             elif v.entity_type == DroneSemanticCones.TypeEntity.WOUNDED_PERSON:
                                 l_proies.append(v)
-                        try :
-                            for proie in l_proies :
-                                for drone in l_drones :
+                        try:
+                            for proie in l_proies:
+                                for drone in l_drones:
                                     if (abs(proie.angle-drone.angle) < pi/2 and abs(proie.distance-drone.distance) < 50):
                                         return False
-                        except :
+                        except:
                             pass
-                        
-                except Exception :
+
+                except Exception:
                     pass
         return True
 
@@ -257,27 +261,25 @@ class MyWallPathDrone(DroneAbstract):
             for message in received_messages:
                 self.message_received = True
                 try:
-                    
+
                     message = message[1]
                     pos = np.array([[message[2][0]], [message[2][1]]])
                     if message[1] == self.identifier and message[0] == self.identifier - 1:
                         if message[3] in [self.Activity.FOUND_WOUNDED_FAR, self.Activity.FOUND_WOUNDED_NEAR, self.Activity.FOUND_WOUNDED_SCAN]:
                             self.type = self.Type.LEADER_RIGHT if self.state == self.Activity.SEARCHING_RIGHT else self.Type.LEADER_LEFT
 
-                    
-                        
                         self.next_pos_to_go.append(pos)
 
-                    if (not message[4] is None) and (not message[5] is None) :
-                        #self.merge_maps(message[4],message[5])
+                    if (not message[4] is None) and (not message[5] is None):
+                        # self.merge_maps(message[4],message[5])
                         mapping = True
 
-                except Exception :
+                except Exception:
                     pass
 
     def merge_maps(self, other_walls, other_exploration):
-        self.HSpace.data_walls = deep_copy(other_walls)
-        self.explored_map = deep_copy(other_exploration)
+        self.HSpace.data_walls = other_walls[:]
+        self.explored_map = other_exploration[:]
 
     def filter_position(self):
 
@@ -291,12 +293,20 @@ class MyWallPathDrone(DroneAbstract):
             pos1 = self.l_pos[-1]+d_pos  # rot.dot(d_pos)
             pos2 = np.array([[cur_pos[0]], [cur_pos[1]]])
 
-            mix = k_pos*pos2 + (1-k_pos) * \
-                pos1 if not self.gps_is_disabled() else pos1
+            if self.gps_is_disabled() or (self.time[-1] > 500 and self.time[-1] < 2000):
+                print(self.time[-1])
+                mix = pos1
+            else:
+                mix = mix = k_pos*pos2 + (1-k_pos)*pos1
             self.l_pos.append(mix)
-
             self.raw_data.append(cur_pos)
-
+            true_pos = self.true_position()
+            self.true_ecart.append(sqrt(
+                (cur_pos[0]-true_pos[0])**2 + (cur_pos[1]-true_pos[1])**2))
+            self.l_true_pos.append(true_pos)
+            d = (mix[0][0]-true_pos[0])**2 + (mix[1][0]-true_pos[1])**2
+            d = sqrt(d)
+            self.ecart.append(d)
             self.l_vit.append(np.array([[d_vit[0]], [d_vit[1]]]))
         else:
             self.time.append(0)
@@ -497,12 +507,15 @@ class MyWallPathDrone(DroneAbstract):
 
         if self.state is self.Activity.SEARCHING_RIGHT:
             if not (self.nstep % self.update_rate):
-                self.update_map(self.lidar())
+                try:
+                    self.update_map(self.lidar())
+                except:
+                    pass
             if not (self.nstep % 50):
-                try :
+                try:
                     self.save_map()
                     self.accumulator_map = np.zeros(self.accumulator_map.shape)
-                except :
+                except:
                     pass
             wall_front = values[front_index] < distance_max
             wall_front_right = values[frontright_index] < distance_max
@@ -532,12 +545,15 @@ class MyWallPathDrone(DroneAbstract):
                 self.state = self.Activity.FOUND_WOUNDED_FAR
         elif self.state is self.Activity.SEARCHING_LEFT:
             if not (self.nstep % self.update_rate):
-                self.update_map(self.lidar())
+                try:
+                    self.update_map(self.lidar())
+                except:
+                    pass
             if not (self.nstep % 50):
-                try :
+                try:
                     self.save_map()
                     self.accumulator_map = np.zeros(self.accumulator_map.shape)
-                except :
+                except:
                     pass
             wall_front = values[front_index] < distance_max
             wall_front_right = values[frontright_index] < distance_max
@@ -569,14 +585,18 @@ class MyWallPathDrone(DroneAbstract):
 
         elif self.state is self.Activity.FOUND_WOUNDED_FAR:
             if not (self.nstep % self.update_rate):
-                self.update_map(self.lidar())
+                try:
+                    self.update_map(self.lidar())
+                except:
+                    pass
             if not (self.nstep % 50):
-                try :
+                try:
                     self.save_map()
                     self.accumulator_map = np.zeros(self.accumulator_map.shape)
-                except :
+                except:
                     pass
-            wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(self.semantic_cones())
+            wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
+                self.semantic_cones())
             if wounded_person_angle < 0:
                 command[self.rotation_velocity] = -self.base_rot_speed
                 command[self.longitudinal_force] = self.base_speed/2
@@ -585,15 +605,21 @@ class MyWallPathDrone(DroneAbstract):
                 command[self.longitudinal_force] = self.base_speed/2
             if wounded_person_distance < 50:
                 self.state = self.Activity.FOUND_WOUNDED_NEAR
-            if wounded_person_distance < 20 :
+            if wounded_person_distance < 20:
                 command[self.grasp] = 1
                 self.state = self.Activity.FOUND_WOUNDED_SCAN
         elif self.state is self.Activity.FOUND_WOUNDED_NEAR:
             if not (self.nstep % self.update_rate):
-                self.update_map(self.lidar())
+                try:
+                    self.update_map(self.lidar())
+                except:
+                    pass
             if not (self.nstep % 100):
-                self.save_map()
-                self.accumulator_map = np.zeros(self.accumulator_map.shape)
+                try:
+                    self.save_map()
+                    self.accumulator_map = np.zeros(self.accumulator_map.shape)
+                except:
+                    pass
             wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
                 self.semantic_cones())
             if wounded_person_angle < 0:
@@ -609,7 +635,10 @@ class MyWallPathDrone(DroneAbstract):
             command[self.grasp] = 1
             command[self.rotation_velocity] = 0.5
             self.n_local_step += 1
-            self.update_map(self.lidar())
+            try:
+                self.update_map(self.lidar())
+            except:
+                pass
             if self.n_local_step > 50:
                 self.save_map()
                 self.accumulator_map = np.zeros(self.accumulator_map.shape)
@@ -635,7 +664,7 @@ class MyWallPathDrone(DroneAbstract):
                     self.map_failed = True
                     self.state = self.Activity.BACKUP_RIGHT if self.identifier % 2 == 0 else self.Activity.BACKUP_LEFT
             else:
-                command[self.longitudinal_force] = 0.5
+                command[self.longitudinal_force] = 0.4
                 destination = self.path[0]
                 x, y = self.get_pos()
                 x = min(int(x), self.size_area[0])//self.scale
@@ -786,23 +815,55 @@ class MyWallPathDrone(DroneAbstract):
             command[self.grasp] = 1
             self.state = self.Activity.REPOSITIONING
 
-        if(np.linalg.norm(self.l_pos[-1]-self.l_pos[0]) < 10) :
+        if(np.linalg.norm(self.l_pos[-1]-self.l_pos[0]) < 10):
             command[self.grasp] = 0
         self.nstep += 1
+
+        distance_from_drone = np.Infinity
+        cones = self.semantic_cones().sensor_values
+        l_proies = []
+        l_drones = []
+        for v in cones:
+
+            if v.entity_type == DroneSemanticCones.TypeEntity.DRONE:
+                l_drones.append(v)
+            elif v.entity_type == DroneSemanticCones.TypeEntity.WOUNDED_PERSON:
+                l_proies.append(v)
+        try:
+            for proie in l_proies:
+                for drone in l_drones:
+                    if (abs(proie.angle-drone.angle) < 0.5 and abs(proie.distance-drone.distance) < 15):
+                        if drone.distance < distance_from_drone:
+                            distance_from_drone = drone.distance
+        except:
+            pass
+        try:
+            var = sum([np.linalg.norm(self.l_pos[-i]-self.l_pos[-1])
+                      for i in range(20)])
+            if distance_from_drone < 100 and var > 50:
+                command[self.longitudinal_force] = 0.5 - \
+                    exp(-distance_from_drone/70)
+        except:
+            pass
+        if (np.linalg.norm(self.l_pos[-1] - self.l_pos[0]) < 20):
+            command[self.grasp] = 0
         return command
 
     def control_follower(self):
-        
+
         self.filter_position()
         self.process_communication_sensor_follower()
-        
+
         if not (self.nstep % self.update_rate):
-            self.update_map(self.lidar())
+            try:
+                self.update_map(self.lidar())
+            except:
+                pass
         if not (self.nstep % 30):
-            try :
+            try:
                 self.save_map()
                 self.accumulator_map = np.zeros(self.accumulator_map.shape)
-            except :
+            except:
                 pass
         values = self.semantic_cones().sensor_values
 
@@ -855,7 +916,7 @@ class MyWallPathDrone(DroneAbstract):
         l_supposed_pos = []
         is_alone = True
         cones = self.semantic_cones().sensor_values
-        
+
         for v in cones:
 
             if v.entity_type == DroneSemanticCones.TypeEntity.DRONE:
@@ -880,7 +941,7 @@ class MyWallPathDrone(DroneAbstract):
             final_pos = sum(l_supposed_pos)/len(l_supposed_pos)
             if self.message_received:
                 self.next_pos_to_go = [final_pos]
-  
+
             else:
                 self.next_pos_to_go.append(final_pos)
 
@@ -888,36 +949,36 @@ class MyWallPathDrone(DroneAbstract):
 
         destination = self.l_pos[-1]
         # try to debug if they are blocked
-        
+
         try:
             somme = 0
             for i in range(20):
                 somme += np.linalg.norm(self.l_pos[-1]-self.l_pos[-i])/20
             if somme < 5 and self.time[-1] > 300:
-                if not self.message_received :
-                    i = random.randint(0,10)
-                    if i%2 == 0 :
+                if not self.message_received:
+                    i = random.randint(0, 10)
+                    if i % 2 == 0:
                         self.type = self.Type.LEADER_LEFT
-                    else :
+                    else:
                         self.type = self.Type.LEADER_RIGHT
                 self.next_pos_to_go.pop(0)
         except:
             pass
         if self.message_received == False and self.time[-1] > 300:
-            i = random.randint(0,10)
-            if i%2 == 0 :
+            i = random.randint(0, 10)
+            if i % 2 == 0:
                 self.type = self.Type.LEADER_LEFT
-            else :
+            else:
                 self.type = self.Type.LEADER_RIGHT
-            
+
         # if distance_from_drone > 100:
         #    self.next_pos_to_go.pop(0)
 
-        command[self.longitudinal_force] = 0.65 - exp(-distance_from_drone/70)
+        command[self.longitudinal_force] = 0.60 - exp(-distance_from_drone/70)
 
         if is_alone and distance_from_drone >= 10:
             command[self.longitudinal_force] = max(
-                0.65 - exp(-distance_from_drone/70), 0.3)
+                0.60 - exp(-distance_from_drone/70), 0.3)
         self.last_dist = distance_from_drone
         self.nstep += 1
         return command
@@ -929,118 +990,116 @@ class MyWallPathDrone(DroneAbstract):
                    self.lateral_force: 0.0,
                    self.rotation_velocity: 0.0,
                    self.grasp: 0}
-        try :
-            x, y = self.get_pos()
-            pos = np.array([x, y])
-            x = min(int(x), self.size_area[0])//self.scale
-            y = min(int(y), self.size_area[1])//self.scale
-            self.update_last_20_pos(self.last_20_pos, (y, x))
 
-            if self.state == self.Activity.STARTING:
-                if self.nstep < 30:
-                    self.get_rescue_center()
+        x, y = self.get_pos()
+        pos = np.array([x, y])
+        x = min(int(x), self.size_area[0])//self.scale
+        y = min(int(y), self.size_area[1])//self.scale
+        self.update_last_20_pos(self.last_20_pos, (y, x))
 
-                elif not self.found_rescue_center:
-                    self.get_rescue_center()
-                    self.found_rescue_center = self.set_anchor_pos()
+        if self.state == self.Activity.STARTING:
+            if self.nstep < 30:
+                self.get_rescue_center()
 
-                    if self.found_rescue_center:
-                        self.state = self.Activity.GO_TO_SLEEP
+            elif not self.found_rescue_center:
+                self.get_rescue_center()
+                self.found_rescue_center = self.set_anchor_pos()
 
+                if self.found_rescue_center:
+                    self.state = self.Activity.GO_TO_SLEEP
+
+            command[self.rotation_velocity] = 0.5
+
+        elif self.state == self.Activity.STAND_BY:
+            if self.process_communication_sensor_rescue() and (self.process_semantic_sensor_wounded(self.semantic_cones()) != (0.0, 0.0)):
+                self.state = self.Activity.GO_GETEM
+
+            elif np.sqrt(np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos)) > 40:
+                self.state = self.Activity.GO_TO_SLEEP
+
+        elif self.state is self.Activity.GO_GETEM:
+            wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
+                self.semantic_cones())
+            if wounded_person_angle < 0:
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
+            elif wounded_person_angle > 0:
                 command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
-            elif self.state == self.Activity.STAND_BY:
-                if self.process_communication_sensor_rescue() and (self.process_semantic_sensor_wounded(self.semantic_cones()) != (0.0, 0.0)):
-                    self.state = self.Activity.GO_GETEM
-
-                elif np.sqrt(np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos)) > 40:
-                    self.state = self.Activity.GO_TO_SLEEP
-
-            elif self.state is self.Activity.GO_GETEM:
-                wounded_person_angle, wounded_person_distance = self.process_semantic_sensor_wounded(
-                    self.semantic_cones())
-                if wounded_person_angle < 0:
-                    command[self.rotation_velocity] = -0.5
-                    command[self.longitudinal_force] = 0.5
-                elif wounded_person_angle > 0:
-                    command[self.rotation_velocity] = 0.5
-                    command[self.longitudinal_force] = 0.5
-
-                if wounded_person_distance < 20 and wounded_person_distance > 0:
-                    command[self.grasp] = 1
-                    self.state = self.Activity.BRING_TO_RESCUE
-
-            elif self.state is self.Activity.BRING_TO_RESCUE:
+            if wounded_person_distance < 20 and wounded_person_distance > 0:
                 command[self.grasp] = 1
-                x, y = self.get_pos()
+                self.state = self.Activity.BRING_TO_RESCUE
 
-                pos = np.array([x, y])
+        elif self.state is self.Activity.BRING_TO_RESCUE:
+            command[self.grasp] = 1
+            x, y = self.get_pos()
 
-                x_diff = self.rescue_center_pos[0] - x
-                y_diff = self.rescue_center_pos[1] - y
+            pos = np.array([x, y])
 
-                alpha = atan2(y_diff, x_diff)
-                alpha = normalize_angle(alpha)
-                a2 = normalize_angle(self.measured_angle())
-                alpha_diff = normalize_angle(alpha-a2)
+            x_diff = self.rescue_center_pos[0] - x
+            y_diff = self.rescue_center_pos[1] - y
 
-                rescue_center_angle, rescue_center_distance = alpha_diff, np.sqrt(
-                    np.dot(pos - self.rescue_center_pos, pos - self.rescue_center_pos))
+            alpha = atan2(y_diff, x_diff)
+            alpha = normalize_angle(alpha)
+            a2 = normalize_angle(self.measured_angle())
+            alpha_diff = normalize_angle(alpha-a2)
 
-                if rescue_center_angle < 0:
-                    command[self.rotation_velocity] = -0.5
-                    command[self.longitudinal_force] = 0.5
-                elif rescue_center_angle > 0:
-                    command[self.rotation_velocity] = 0.5
-                    command[self.longitudinal_force] = 0.5
-                if self.is_stucked(self.last_20_pos):
-                    self.state = self.Activity.GO_TO_SLEEP
-                if rescue_center_distance < 20 and rescue_center_distance > 0:
-                    command[self.grasp] = 1
-                    self.state = self.Activity.GO_TO_SLEEP
+            rescue_center_angle, rescue_center_distance = alpha_diff, np.sqrt(
+                np.dot(pos - self.rescue_center_pos, pos - self.rescue_center_pos))
 
-            elif self.state is self.Activity.GO_TO_SLEEP:
-                x, y = self.get_pos()
+            if rescue_center_angle < 0:
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
+            elif rescue_center_angle > 0:
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
+            if self.is_stucked(self.last_20_pos):
+                self.state = self.Activity.GO_TO_SLEEP
+            if rescue_center_distance < 20 and rescue_center_distance > 0:
+                command[self.grasp] = 1
+                self.state = self.Activity.GO_TO_SLEEP
 
-                pos = np.array([x, y])
+        elif self.state is self.Activity.GO_TO_SLEEP:
+            x, y = self.get_pos()
 
-                x_diff = self.stand_by_pos[0] - x
-                y_diff = self.stand_by_pos[1] - y
+            pos = np.array([x, y])
 
-                alpha = atan2(y_diff, x_diff)
-                alpha = normalize_angle(alpha)
-                a2 = normalize_angle(self.measured_angle())
-                alpha_diff = normalize_angle(alpha-a2)
+            x_diff = self.stand_by_pos[0] - x
+            y_diff = self.stand_by_pos[1] - y
 
-                stand_by_angle, stand_by_distance = alpha_diff, np.sqrt(
-                    np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos))
+            alpha = atan2(y_diff, x_diff)
+            alpha = normalize_angle(alpha)
+            a2 = normalize_angle(self.measured_angle())
+            alpha_diff = normalize_angle(alpha-a2)
 
-                if stand_by_angle < 0:
-                    command[self.rotation_velocity] = -0.5
-                    command[self.longitudinal_force] = 0.5
-                elif stand_by_angle > 0:
-                    command[self.rotation_velocity] = 0.5
-                    command[self.longitudinal_force] = 0.5
+            stand_by_angle, stand_by_distance = alpha_diff, np.sqrt(
+                np.dot(pos - self.stand_by_pos, pos - self.stand_by_pos))
 
-                if stand_by_distance < 20 and stand_by_distance > 0:
-                    self.state = self.Activity.STAND_BY
+            if stand_by_angle < 0:
+                command[self.rotation_velocity] = -0.5
+                command[self.longitudinal_force] = 0.5
+            elif stand_by_angle > 0:
+                command[self.rotation_velocity] = 0.5
+                command[self.longitudinal_force] = 0.5
 
-            touch_value = self.process_touch_sensor()
-            if touch_value == "left":
-                command[self.lateral_force] = self.base_speed
-            elif touch_value == "right":
-                command[self.lateral_force] = -self.base_speed
+            if stand_by_distance < 20 and stand_by_distance > 0:
+                self.state = self.Activity.STAND_BY
 
-            self.nstep += 1
-        except :
-            pass
+        touch_value = self.process_touch_sensor()
+        if touch_value == "left":
+            command[self.lateral_force] = self.base_speed
+        elif touch_value == "right":
+            command[self.lateral_force] = -self.base_speed
+
+        self.nstep += 1
 
         return command
 
     def control(self):
         if self.type is self.Type.LEADER_RIGHT or self.type is self.Type.LEADER_LEFT or self.type is self.Type.FOLLOWER:
             self.send_cartography = not (self.nstep % 50)
-            if self.type != self.Type.FOLLOWER :
+            if self.type != self.Type.FOLLOWER:
                 return self.control_leader()
         if self.type is self.Type.FOLLOWER:
             return self.control_follower()

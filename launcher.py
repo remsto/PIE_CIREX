@@ -1,26 +1,24 @@
+from solutions.my_final_drone import MyWallPathDrone
+from solutions.my_drone_lidar_communication import MyDroneLidarCommunication
+from maps.map_compet_02 import MyMapCompet02
+from maps.map_compet_01 import MyMapCompet01
+from maps.map_random import MyMapRandom
+from maps.map_lidar_communication import MyMapLidarCommunication
+from spg_overlay.team_info import TeamInfo
+from spg_overlay.sensor_disablers import EnvironmentType
+from spg_overlay.save_data import SaveData
+from spg_overlay.score_manager import ScoreManager
+from spg_overlay.misc_data import MiscData
+from spg_overlay.fps_display import FpsDisplay
+import matplotlib.pyplot as plt
 import time
 
 import cv2
 import numpy as np
 from simple_playgrounds.engine import Engine
-
-from spg_overlay.fps_display import FpsDisplay
-from spg_overlay.misc_data import MiscData
-from spg_overlay.score_manager import ScoreManager
-from spg_overlay.save_data import SaveData
-from spg_overlay.sensor_disablers import EnvironmentType
-from spg_overlay.team_info import TeamInfo
-
-from maps.map_lidar_communication import MyMapLidarCommunication
-from maps.map_random import MyMapRandom
-from maps.map_compet_01 import MyMapCompet01
-from maps.map_compet_02 import MyMapCompet02
-
-from solutions.my_drone_lidar_communication import MyDroneLidarCommunication
-from solutions.my_drone_random import MyDroneRandom
-from solutions.my_wall_drone import MyWallDrone
-from solutions.my_path_drone import MyPathDrone
-from solutions.my_final_drone import MyWallPathDrone
+import matplotlib
+import matplotlib
+matplotlib.use('TkAgg')
 
 
 class MyMap(MyMapCompet02):
@@ -34,58 +32,79 @@ class MyDrone(MyWallPathDrone):
 class Launcher:
     def __init__(self):
         self.display = True
-        self.nb_rounds = 3
-        self.with_com = True
+        self.nb_rounds = 1
+        self.total_time = 0
+        self.mean_time = 0
 
         self.team_info = TeamInfo()
 
-        # Create a map only to retrieve const data associated with the map
-        # Should be improved...
-        my_map = MyMap()
-        self.number_drones = my_map.number_drones
-        self.time_step_limit = my_map.time_step_limit
-        self.real_time_limit = my_map.real_time_limit
-        self.number_wounded_persons = my_map.number_wounded_persons
-        self.size_area = my_map.size_area
+        self.my_map = MyMap()
+        self.with_com = True
 
-        self.score_manager = ScoreManager(number_drones=self.number_drones,
-                                          time_step_limit=self.time_step_limit,
-                                          real_time_limit=self.real_time_limit,
-                                          total_number_wounded_persons=self.number_wounded_persons)
+        self.score_manager = ScoreManager(number_drones=self.my_map.number_drones,
+                                          time_step_limit=self.my_map.time_step_limit,
+                                          real_time_limit=self.my_map.real_time_limit,
+                                          total_number_wounded_persons=self.my_map.number_wounded_persons)
 
         # BUILD DRONES
-        self.misc_data = MiscData(size_area=self.size_area,
-                                  number_drones=self.number_drones)
+        misc_data = MiscData(size_area=self.my_map.size_area,
+                             number_drones=self.my_map.number_drones)
+        drones = [MyDrone(identifier=i, misc_data=misc_data)
+                  for i in
+                  range(self.my_map.number_drones)]
 
+        self.my_map.set_drones(drones)
+
+        self.wounded = self.my_map.number_wounded_persons
         self.save_data = SaveData(self.team_info)
 
-        self.real_time_limit_reached = False
+    def reset(self, environment_type):
+        self.mean_time = 0
 
-    def define_all_messages(self, a_map):
+        self.my_map = MyMap(environment_type)
+        self.with_com = True
+
+        self.score_manager = ScoreManager(number_drones=self.my_map.number_drones,
+                                          time_step_limit=self.my_map.time_step_limit,
+                                          real_time_limit=self.my_map.real_time_limit,
+                                          total_number_wounded_persons=self.my_map.number_wounded_persons,
+                                          )
+
+        # BUILD DRONES
+        misc_data = MiscData(size_area=self.my_map.size_area)
+        drones = [MyDrone(identifier=i, misc_data=misc_data)
+                  for i in
+                  range(self.my_map.number_drones)]
+
+        self.my_map.set_drones(drones)
+
+    def define_all_messages(self):
         messages = []
-        for i in range(0, self.number_drones):
+        number_drones = len(self.my_map.drones)
+        for i in range(0, number_drones):
             if self.with_com:
-                msg_data = a_map.drones[i].define_message()
-                one_message = (a_map.drones[i].communication, msg_data, None)
+                msg_data = self.my_map.drones[i].define_message()
+                one_message = (
+                    self.my_map.drones[i].communication, msg_data, None)
                 messages.append(one_message)
         return messages
 
+    def go_to_pos(pos):
+        pass
+
     def one_round(self, environment_type, num_round):
-        my_map = MyMap(environment_type)
+        self.reset(environment_type)
+        my_drones = self.my_map.drones
+        my_playground = self.my_map.playground
 
-        # BUILD DRONES
-        my_drones = [MyDrone(identifier=i, misc_data=self.misc_data)
-                     for i in
-                     range(self.number_drones)]
-        my_map.set_drones(my_drones)
+        engine = Engine(playground=my_playground,
+                        time_limit=self.my_map.time_step_limit, screen=self.display)
 
-        engine = Engine(playground=my_map.playground, time_limit=self.time_step_limit, screen=self.display)
-
-        # fps_display = FpsDisplay(period_display=0.5)
+        fps_display = FpsDisplay(period_display=0.5)
 
         rescued_number = 0
-        rescued_all_time_step = 0
-        my_map.explored_map.reset()
+        time_rescued_all = 0
+        self.my_map.explored_map.reset()
 
         start_real_time = time.time()
 
@@ -96,14 +115,14 @@ class Launcher:
 
             engine.update_observations(grasped_invisible=True)
 
-            my_map.explored_map.update(my_drones)
+            self.my_map.explored_map.update(my_drones)
 
             # COMPUTE ALL THE MESSAGES
-            messages = self.define_all_messages(my_map)
+            messages = self.define_all_messages()
 
             # COMPUTE ACTIONS
             actions = {}
-            for i in range(0, self.number_drones):
+            for i in range(0, self.my_map.number_drones):
                 actions[my_drones[i]] = my_drones[i].control()
 
             my_drones[0].display()
@@ -112,7 +131,7 @@ class Launcher:
 
             # REWARDS
             new_reward = 0
-            for i in range(0, self.number_drones):
+            for i in range(0, self.my_map.number_drones):
                 new_reward += my_drones[i].reward
 
             if new_reward != 0:
@@ -121,13 +140,14 @@ class Launcher:
             # if display:
             #     time.sleep(0.002)
 
-            if rescued_number == self.number_wounded_persons and rescued_all_time_step == 0:
-                rescued_all_time_step = engine.elapsed_time
+            if rescued_number == self.my_map.number_wounded_persons and time_rescued_all == 0:
+                time_rescued_all = engine.elapsed_time
 
             end_real_time = time.time()
             real_time_elapsed = (end_real_time - start_real_time)
-            if real_time_elapsed > self.real_time_limit:
-                self.real_time_limit_reached = True
+            if real_time_elapsed > self.my_map.real_time_limit:
+                print("The real time limit of {}s is reached !...".format(
+                    self.my_map.real_time_limit))
                 terminate = True
 
             if terminate:
@@ -136,44 +156,79 @@ class Launcher:
             # fps_display.update()
 
         last_image = engine.generate_playground_image()
+        l_drones = self.my_map.drones
+        for d in l_drones:
+            pos = d.l_pos
+            true_pos = d.l_true_pos
+            raw_data = d.raw_data
+            plt.figure()
+            pos_x = [i[0][0] for i in pos]
+            pos_y = [750-i[1][0] for i in pos]
+            true_pos_x = [i[0] for i in true_pos]
+            true_pos_y = [750-i[1] for i in true_pos]
+            plt.plot([i[0] for i in raw_data], [750-i[1]
+                                                for i in raw_data], label="raw data")
+            plt.plot(pos_x, pos_y,  label="filtered positions")
+            plt.plot(true_pos_x, true_pos_y, label="true position")
 
+            plt.grid()
+            plt.legend()
+            plt.show()
+        for d in l_drones:
+            ecart = d.ecart
+            m1 = sum(ecart[:500])/len(ecart[:500])
+            m2 = sum(ecart[500:2000])/len(ecart[500:2000])
+            m3 = sum(ecart[2000:])/len(ecart[2000:])
+            moyenne = [m1] * 500 + [m2]*1500 + [m3]*len(ecart[2000:])
+            plt.figure()
+            plt.plot(range(len(ecart)), d.true_ecart, color="grey",
+                     label="non filtered measures distance from true pos")
+            plt.plot(range(len(ecart)), ecart, color="blue",
+                     label="distance from true pos")
+            plt.plot(range(len(moyenne)), moyenne,
+                     "r", label="average distance")
+
+            plt.grid()
+            plt.xlabel = "temps"
+            plt.ylabel = "ecart en pixels"
+            plt.legend()
+            plt.show()
         engine.terminate()
 
-        score_exploration = my_map.explored_map.score()
-        # my_map.explored_map.display()
+        score_exploration = self.my_map.explored_map.score()
+        # self.my_map.explored_map.display()
 
-        last_image_explo_lines = my_map.explored_map.get_pretty_map_explo_lines()
-        last_image_explo_zones = my_map.explored_map.get_pretty_map_explo_zones()
+        last_image_explo_lines = self.my_map.explored_map.get_pretty_map_explo_lines()
+        last_image_explo_zones = self.my_map.explored_map.get_pretty_map_explo_zones()
         self.save_data.save_images(last_image, last_image_explo_lines, last_image_explo_zones, environment_type,
                                    num_round)
 
-        return engine.elapsed_time, rescued_all_time_step, score_exploration, rescued_number, real_time_elapsed
+        return engine.elapsed_time, time_rescued_all, score_exploration, rescued_number
 
     def go(self):
         for environment_type in MyMap.environment_series:
             print("*** Environment '{}'".format(environment_type.name.lower()))
             for i_try in range(0, self.nb_rounds):
-                result = self.one_round(environment_type, i_try)
-                (elapsed_time_step, rescued_all_time_step, score_exploration, rescued_number, real_time_elapsed) = result
+                elapsed_time_step, time_rescued_all, score_exploration, rescued_number = self.one_round(
+                    environment_type,
+                    i_try)
 
-                result_score = self.score_manager.compute_score(rescued_number,
-                                                                score_exploration,
-                                                                rescued_all_time_step)
-                (final_score, percent_rescued, score_time_step) = result_score
-
+                self.total_time += elapsed_time_step
+                self.mean_time = self.total_time / (i_try + 1)
+                final_score, percent_rescued, score_time_step = self.score_manager.compute_score(rescued_number,
+                                                                                                 score_exploration,
+                                                                                                 time_rescued_all)
                 print("\t* Round n°{}".format(i_try),
-                      ", real time elapsed = {:.1f}/{}s".format(real_time_elapsed, self.real_time_limit),
-                      ", rescued number ={}/{}".format(rescued_number, self.number_wounded_persons),
-                      ", exploration score =", "{:.1f}%".format(score_exploration * 100),
-                      ", elapse time = {}/{} steps".format(elapsed_time_step, self.time_step_limit),
-                      ", time to rescue all = {} steps".format(rescued_all_time_step),
+                      ", rescued number ={}/{}".format(
+                          rescued_number, self.my_map.number_wounded_persons),
+                      ", exploration score =", "{:.1f}%".format(
+                          score_exploration * 100),
+                      ", elapse time step = {}s".format(elapsed_time_step),
+                      ", time to rescue all = {}s".format(time_rescued_all),
                       ", final score =", "{:.2f}/100".format(final_score)
                       )
-                if self.real_time_limit_reached:
-                    print("\t\tThe real time limit of {}s is reached first.".format(self.real_time_limit))
-
                 self.save_data.save_one_round(environment_type, i_try, percent_rescued, score_exploration,
-                                              elapsed_time_step, rescued_all_time_step, score_time_step, final_score)
+                                              elapsed_time_step, time_rescued_all, score_time_step, final_score)
         self.save_data.fill_pdf()
 
 
