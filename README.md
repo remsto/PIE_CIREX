@@ -12,7 +12,7 @@ The main files are:
 * A custom-made algorithm for line detection in cartography, using the lidar data
 
 ## Screenshots
-![cirex_gif](https://github.com/remsto/PIE_CIREX/assets/66690700/6cf52324-7541-42b4-bfc7-94ebf73a462d)
+![cirex_gif](https://github.com/remsto/PIE_CIREX/blob/master/gif/cirex_gif.gif)
 
 
 
